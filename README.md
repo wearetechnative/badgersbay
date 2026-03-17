@@ -1,4 +1,4 @@
-[](images/badgersbay-github.png)
+()[images/badgersbay-github.png]
 
 # Honeybadger Server
 
