@@ -1,0 +1,23 @@
+# Honeybadger Server Configuration
+networkport: 7123
+storage_location: ./reports
+
+# Compliance Tracking
+compliance:
+  enabled: true
+
+  # Audit months (1-12) - when compliance audits must be completed
+  # Example: [3, 9] = March and September
+  audit_months: [3, 9]
+
+  # Required reports for a complete set
+  required_reports:
+    # Always required
+    mandatory:
+      - neofetch
+      - lynis
+
+    # At least one required
+    one_of:
+      - trivy
+      - vulnix

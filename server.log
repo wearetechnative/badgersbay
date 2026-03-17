@@ -1,0 +1,17 @@
+2026-03-17 11:50:56,888 - INFO - Configuration loaded from config.yaml
+2026-03-17 11:50:56,888 - INFO - Network port: 7123
+2026-03-17 11:50:56,888 - INFO - Storage location: ./reports
+2026-03-17 11:50:56,888 - INFO - Compliance mode: True
+2026-03-17 11:50:56,888 - INFO - Audit months: [3, 9]
+2026-03-17 11:50:56,888 - INFO - Required reports: ['neofetch', 'lynis'] + one of ['trivy', 'vulnix']
+2026-03-17 11:50:56,888 - INFO - Rebuilding compliance cache...
+2026-03-17 11:50:56,888 - INFO - Cache rebuilt: 1 periods, 1 systems
+2026-03-17 11:50:56,890 - INFO - Honeybadger Server starting on port 7123
+2026-03-17 11:50:56,891 - INFO - Storing reports in: ./reports
+2026-03-17 11:50:56,891 - INFO - Health check available at: http://localhost:7123/health
+2026-03-17 11:50:56,891 - INFO - Press Ctrl+C to stop the server
+2026-03-17 11:51:07,065 - INFO - 127.0.0.1 - "GET /health HTTP/1.1" 200 -
+2026-03-17 11:51:19,328 - INFO - 127.0.0.1 - "POST / HTTP/1.1" 200 -
+2026-03-17 11:51:19,329 - INFO - Report saved: reports/2026-03/testserver01-testuser/lynis-report.json
+2026-03-17 11:51:43,638 - INFO - 127.0.0.1 - "GET / HTTP/1.1" 200 -
+2026-03-17 11:51:49,701 - INFO - 127.0.0.1 - "GET / HTTP/1.1" 200 -

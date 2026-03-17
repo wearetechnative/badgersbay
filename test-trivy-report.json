@@ -1,0 +1,62 @@
+{
+  "SchemaVersion": 2,
+  "ArtifactName": "ubuntu:22.04",
+  "ArtifactType": "container_image",
+  "CreatedAt": "2026-03-16T10:30:00Z",
+  "Metadata": {
+    "OS": {
+      "Family": "ubuntu",
+      "Name": "22.04"
+    },
+    "ImageID": "sha256:3b418d7b466a",
+    "DiffIDs": [
+      "sha256:7e5b44b47f3a"
+    ],
+    "RepoTags": [
+      "ubuntu:22.04"
+    ]
+  },
+  "Results": [
+    {
+      "Target": "ubuntu:22.04 (ubuntu 22.04)",
+      "Class": "os-pkgs",
+      "Type": "ubuntu",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2024-1234",
+          "PkgName": "openssl",
+          "InstalledVersion": "3.0.2-0ubuntu1.10",
+          "FixedVersion": "3.0.2-0ubuntu1.15",
+          "Severity": "HIGH",
+          "Title": "OpenSSL: memory corruption vulnerability",
+          "Description": "A memory corruption vulnerability in OpenSSL could allow remote code execution"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-5678",
+          "PkgName": "libcurl4",
+          "InstalledVersion": "7.81.0-1ubuntu1.10",
+          "FixedVersion": "7.81.0-1ubuntu1.16",
+          "Severity": "MEDIUM",
+          "Title": "curl: HTTP authentication bypass",
+          "Description": "An authentication bypass in libcurl could expose credentials"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-9999",
+          "PkgName": "systemd",
+          "InstalledVersion": "249.11-0ubuntu3.9",
+          "FixedVersion": "",
+          "Severity": "LOW",
+          "Title": "systemd: minor information disclosure",
+          "Description": "A minor information disclosure issue in systemd"
+        }
+      ]
+    }
+  ],
+  "Summary": {
+    "Critical": 0,
+    "High": 1,
+    "Medium": 1,
+    "Low": 1,
+    "Unknown": 0
+  }
+}

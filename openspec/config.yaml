@@ -1,0 +1,58 @@
+schema: spec-driven
+
+# Project context
+context: |
+  ## Honeybadger Server
+
+  A centralized security report aggregation server that collects and displays
+  vulnerability scan results from multiple hosts.
+
+  **Tech Stack:**
+  - Python 3 with standard library (http.server, pathlib, yaml, json)
+  - Single-file application architecture
+  - File-based storage (no database)
+  - HTML/CSS/JavaScript dashboard (embedded in Python)
+
+  **Domain:**
+  Security scanning and compliance monitoring across multiple systems.
+
+  **Supported Report Types:**
+  1. **Lynis** - System hardening and security audit
+  2. **Trivy** - Container and OS vulnerability scanner
+  3. **Vulnix** - NixOS-specific vulnerability scanner
+  4. **Neofetch** - System information (used as metadata/identifier)
+
+  **Key Conventions:**
+  - Reports stored as: `<hostname>-<username>-<yyyymmdd>/`
+  - Valid system combinations:
+    - Neofetch + Lynis + Trivy (containers/traditional)
+    - Neofetch + Lynis + Vulnix (NixOS systems)
+  - Neofetch is ALWAYS required (provides system identity)
+  - Dashboard auto-refreshes every 30 seconds
+  - All JSON validation happens before storage
+
+  **Architecture Principles:**
+  - Simple, single-file deployment
+  - No external dependencies beyond Python stdlib + PyYAML
+  - Filesystem as database
+  - Stateless HTTP server
+  - Fail-fast validation
+
+# Per-artifact rules
+rules:
+  proposal:
+    - Keep proposals focused on single capability changes
+    - Always consider impact on existing report storage structure
+    - Consider backwards compatibility with existing clients
+  design:
+    - Maintain single-file architecture unless absolutely necessary
+    - Minimize external dependencies
+    - Document any new validation rules clearly
+  specs:
+    - Include JSON schema examples for report formats
+    - Document HTTP API changes with curl examples
+    - Specify status code behavior explicitly
+  tasks:
+    - Test with all 4 report types
+    - Verify dashboard updates correctly
+    - Check backwards compatibility with existing reports
