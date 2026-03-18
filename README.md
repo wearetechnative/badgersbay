@@ -1,6 +1,8 @@
+<img src="images/badgersbay-github.png" />
+
 # Honeybadger Server
 
-A central server for collecting and storing Lynis and Neofetch (system info) reports with built-in ISO compliance tracking.
+A central server for collecting and storing Lynis, Trivy, Vulnix, and Neofetch (system info) reports with built-in ISO compliance tracking.
 
 ## Quick Start
 
@@ -32,7 +34,9 @@ compliance:
     mandatory:
       - neofetch
       - lynis
-    one_of: []
+    one_of:
+      - trivy
+      - vulnix
 ```
 
 ## Compliance Mode (ISO Audit Tracking)
@@ -55,7 +59,9 @@ compliance:
     mandatory:
       - neofetch  # System identification (always required)
       - lynis     # Security audit (always required)
-    one_of: []    # No additional scanners required for ISO compliance
+    one_of:
+      - trivy     # Container/OS scanner (Ubuntu, Debian, etc.)
+      - vulnix    # NixOS scanner
 ```
 
 ### How It Works
@@ -86,6 +92,7 @@ compliance:
 A system is **compliant** when it has:
 - ✓ Neofetch report (provides system ID)
 - ✓ Lynis report (security audit)
+- ✓ **Either** Trivy **OR** Vulnix (at least one scanner)
 
 **Compliance Dashboard:**
 
@@ -139,14 +146,14 @@ curl -X POST http://server:7123/ \
   -H "X-Report-Type: lynis" \
   -d @/path/to/lynis-report.json
 
-# Neofetch report
+# Trivy report
 curl -X POST http://server:7123/ \
   -H "Content-Type: application/json" \
   -H "X-Hostname: $(hostname)" \
   -H "X-Username: $(whoami)" \
   -H "X-OS-Type: ubuntu" \
-  -H "X-Report-Type: neofetch" \
-  -d @/path/to/neofetch-report.json
+  -H "X-Report-Type: trivy" \
+  -d @/path/to/trivy-report.json
 ```
 
 ### Option 2: Via JSON Body
@@ -166,14 +173,16 @@ curl -X POST http://server:7123/ \
 
 - **hostname**: Hostname of the scanned machine (required)
 - **username**: User who performed the scan (required)
-- **report_type**: Report type - "lynis" or "neofetch" (required)
+- **report_type**: Report type - "lynis", "trivy", "vulnix", or "neofetch" (required)
 
 ### Validation
 
 The server validates:
-- **Report type**: Must be one of: lynis, neofetch
+- **Report type**: Must be one of: lynis, trivy, vulnix, neofetch
 - **JSON structure**:
   - Lynis: checks for version fields (warning only)
+  - Trivy: requires `SchemaVersion` and `ArtifactName`
+  - Vulnix: must be valid JSON object or array
   - Neofetch: must be JSON object with system info fields
 - **JSON format**: Must be valid JSON
 
@@ -196,6 +205,40 @@ curl -X POST http://honeybadger-server:7123/ \
   -H "X-OS-Type: ubuntu" \
   -H "X-Report-Type: lynis" \
   -d @/var/log/lynis-report.json
+```
+
+### Trivy
+
+```bash
+#!/bin/bash
+# Scan container image with Trivy
+trivy image --format json --output trivy-report.json ubuntu:22.04
+
+# Submit report to Honeybadger server
+curl -X POST http://honeybadger-server:7123/ \
+  -H "Content-Type: application/json" \
+  -H "X-Hostname: $(hostname)" \
+  -H "X-Username: $(whoami)" \
+  -H "X-OS-Type: ubuntu" \
+  -H "X-Report-Type: trivy" \
+  -d @trivy-report.json
+```
+
+### Vulnix
+
+```bash
+#!/bin/bash
+# Scan NixOS system with Vulnix
+vulnix --json > vulnix-report.json
+
+# Submit report to Honeybadger server
+curl -X POST http://honeybadger-server:7123/ \
+  -H "Content-Type: application/json" \
+  -H "X-Hostname: $(hostname)" \
+  -H "X-Username: $(whoami)" \
+  -H "X-OS-Type: nixos" \
+  -H "X-Report-Type: vulnix" \
+  -d @vulnix-report.json
 ```
 
 ### Neofetch (System Info)
@@ -251,7 +294,7 @@ Shows audit-period-based tracking:
   - **Username**: User who submitted the report
   - **OS Type**: Operating system (from X-OS-Type header)
   - **Upload Date**: When reports were submitted
-  - **Reports**: Badge indicators (N=Neofetch, L=Lynis)
+  - **Reports**: Badge indicators (N=Neofetch, L=Lynis, T=Trivy, V=Vulnix)
   - **Status**: ✓ Complete, ⚠ Incomplete, ✗ Missing
 - **Filter dropdown**: Show all, complete only, or incomplete only
 - **Download**: Click report badges to download individual reports
@@ -270,7 +313,7 @@ Shows date-based tracking:
 - Filter/search functionality for hostname, SID, username, or date
 - Auto-refresh every 30 seconds
 - **Status indicators**:
-  - **Green OK**: Valid combination (Neofetch + Lynis)
+  - **Green OK**: Valid combination (Neofetch + Lynis + Trivy OR Neofetch + Lynis + Vulnix)
   - **Red NOK**: Missing required reports
 - Download individual reports by clicking badges
 
@@ -307,7 +350,8 @@ curl http://localhost:7123/health
     "unique_hosts": 15,
     "reports_by_type": {
       "lynis": 40,
-      "neofetch": 38
+      "trivy": 35,
+      "vulnix": 20
     }
   },
   "storage": {
@@ -332,10 +376,12 @@ reports/
   ├── 2026-03/                    ← Audit period (March 2026)
   │   ├── laptop-SN001-alice/     ← {sid}-{username}
   │   │   ├── neofetch-report.json
-  │   │   └── lynis-report.json
+  │   │   ├── lynis-report.json
+  │   │   └── trivy-report.json
   │   └── laptop-SN002-bob/
   │       ├── neofetch-report.json
-  │       └── lynis-report.json
+  │       ├── lynis-report.json
+  │       └── vulnix-report.json
   └── 2026-09/                    ← Audit period (September 2026)
       └── ...
 ```
@@ -352,6 +398,7 @@ Date-based structure:
 reports/
   ├── webserver01-alice-20260316/  ← {hostname}-{username}-{YYYYMMDD}
   │   ├── lynis-report.json
+  │   ├── trivy-report.json
   │   └── neofetch-report.json
   └── laptop42-bob-20260317/
       └── ...
@@ -362,9 +409,14 @@ reports/
 
 ### Valid Report Combinations
 
-**Complete set:**
-- Neofetch (system identification)
-- Lynis (security audit)
+**Complete set (configurable):**
+- All mandatory reports (default: Neofetch + Lynis)
+- At least one from one_of list (default: Trivy OR Vulnix)
+
+**Example valid combinations:**
+- Neofetch + Lynis + Trivy ✓
+- Neofetch + Lynis + Vulnix ✓
+- Neofetch + Lynis + Trivy + Vulnix ✓
 
 ## Testing
 
@@ -375,3 +427,4 @@ reports/
 # View stored reports
 ls -lR reports/
 ```
+
