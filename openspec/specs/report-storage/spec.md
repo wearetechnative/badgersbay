@@ -10,8 +10,6 @@ Reports are stored on the filesystem in a date-organized directory structure. Ea
 <storage_location>/
   └── <hostname>-<username>-<yyyymmdd>/
       ├── lynis-report.json
-      ├── trivy-report.json
-      ├── vulnix-report.json
       └── neofetch-report.json
 ```
 
@@ -21,11 +19,9 @@ Reports are stored on the filesystem in a date-organized directory structure. Ea
 ./reports/
   ├── webserver01-admin-20260316/
   │   ├── lynis-report.json
-  │   ├── trivy-report.json
   │   └── neofetch-report.json
   └── nixos-prod-sysadmin-20260315/
       ├── lynis-report.json
-      ├── vulnix-report.json
       └── neofetch-report.json
 ```
 
@@ -37,16 +33,22 @@ Reports are stored on the filesystem in a date-organized directory structure. Ea
 - `username`: From `X-Username` header or JSON field
 - `yyyymmdd`: Current date when report is received (YYYYMMDD format)
 
-## File Naming
+## Requirement: File Naming
 
-Each report type maps to a specific filename:
+Each report type SHALL map to a specific filename in the host directory.
 
 | Report Type | Filename |
 |-------------|----------|
 | lynis | `lynis-report.json` |
-| trivy | `trivy-report.json` |
-| vulnix | `vulnix-report.json` |
 | neofetch | `neofetch-report.json` |
+
+#### Scenario: Lynis report storage
+- **WHEN** server receives a valid lynis report
+- **THEN** server stores it as `lynis-report.json` in the appropriate host directory
+
+#### Scenario: Neofetch report storage
+- **WHEN** server receives a valid neofetch report
+- **THEN** server stores it as `neofetch-report.json` in the appropriate host directory
 
 ## Overwrite Behavior
 

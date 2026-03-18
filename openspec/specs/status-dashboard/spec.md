@@ -15,17 +15,22 @@ Both endpoints serve the same HTML dashboard.
 
 ## Dashboard Features
 
-### Statistics Cards
+### Requirement: Statistics Cards
 
-Summary statistics displayed at the top:
+The dashboard SHALL display summary statistics for all reports.
 
 | Metric | Description |
 |--------|-------------|
 | Unique host-user combinations | Count of distinct hostname-username pairs |
 | Lynis reports | Total reports containing Lynis data |
-| Trivy reports | Total reports containing Trivy data |
-| Vulnix reports | Total reports containing Vulnix data |
 | Neofetch reports | Total reports containing Neofetch data |
+
+#### Scenario: Statistics calculation
+- **WHEN** dashboard loads
+- **THEN** it scans all report directories and displays:
+  - Total unique host-user combinations
+  - Count of directories containing `lynis-report.json`
+  - Count of directories containing `neofetch-report.json`
 
 ### Report Table
 
@@ -41,19 +46,29 @@ Columns:
 | **Reports** | File existence checks | Badge links for each available report |
 | **Status** | Validation logic | OK/NOK based on report combination |
 
-### Status Logic
+### Requirement: Status Logic
 
-**OK (Green)** - Valid report combination present:
-- Neofetch + Lynis + Trivy
-- **OR** Neofetch + Lynis + Vulnix
+A system SHALL be marked as **OK (Green)** when both required reports are present:
+- Neofetch (required - provides system identity)
+- Lynis (required - system hardening audit)
 
-**NOK (Red)** - Invalid or incomplete:
-- Missing Neofetch (required)
-- Missing Lynis (required)
-- Missing both Trivy and Vulnix
-- Only partial reports present
+A system SHALL be marked as **NOK (Red)** when any required report is missing.
 
-**Note:** Neofetch is ALWAYS required for OK status.
+#### Scenario: OK status with complete reports
+- **WHEN** a host directory contains both `neofetch-report.json` AND `lynis-report.json`
+- **THEN** dashboard displays status as OK (green)
+
+#### Scenario: NOK status missing Neofetch
+- **WHEN** a host directory contains `lynis-report.json` but NOT `neofetch-report.json`
+- **THEN** dashboard displays status as NOK (red)
+
+#### Scenario: NOK status missing Lynis
+- **WHEN** a host directory contains `neofetch-report.json` but NOT `lynis-report.json`
+- **THEN** dashboard displays status as NOK (red)
+
+#### Scenario: NOK status missing all reports
+- **WHEN** a host directory exists but contains no report files
+- **THEN** dashboard displays status as NOK (red)
 
 ### Timestamp Colors
 
@@ -63,16 +78,24 @@ Columns:
 | **Red** | Invalid combination | Missing required reports |
 | **Black** | Valid combination + ≥24h old | Complete but not recent |
 
-### Report Badges
+### Requirement: Report Badges
 
-**Green badges** - Report exists, clickable to download:
+The dashboard SHALL display badges for each available report type in the Reports column.
+
+**Green badges** (report exists, clickable to download):
 - `Lynis`
-- `Trivy`
-- `Vulnix`
 - `Neofetch`
 
-**Red badge** - Missing required report:
+**Red badge** (missing required report):
 - `Missing Neofetch`
+
+#### Scenario: Complete reports display
+- **WHEN** a host directory contains both Lynis and Neofetch reports
+- **THEN** dashboard displays two green badges: "Lynis" and "Neofetch"
+
+#### Scenario: Missing Neofetch warning
+- **WHEN** a host directory is missing `neofetch-report.json`
+- **THEN** dashboard displays a red "Missing Neofetch" badge
 
 Downloads are named: `<hostname>-<username>-<yyyymmdd>-<type>-report.json`
 

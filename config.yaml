@@ -17,7 +17,5 @@ compliance:
       - neofetch
       - lynis
 
-    # At least one required
-    one_of:
-      - trivy
-      - vulnix
+    # At least one required (empty list = none required)
+    one_of: []

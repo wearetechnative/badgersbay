@@ -13,14 +13,14 @@ curl -X POST http://localhost:7123/ \
   -d @test-lynis-report.json
 echo -e "\n"
 
-# Test 2: Trivy report
-echo "Test 2: Sending Trivy report..."
+# Test 2: Neofetch report
+echo "Test 2: Sending Neofetch report..."
 curl -X POST http://localhost:7123/ \
   -H "Content-Type: application/json" \
   -H "X-Hostname: testserver01" \
   -H "X-Username: testuser" \
-  -H "X-Report-Type: trivy" \
-  -d @test-trivy-report.json
+  -H "X-Report-Type: neofetch" \
+  -d '{"hostname": "testserver01", "os": "Ubuntu 22.04", "kernel": "5.15.0"}'
 echo -e "\n"
 
 # Test 3: Different server

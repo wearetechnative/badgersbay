@@ -6,7 +6,7 @@ This document provides context for AI assistants working on this project.
 
 A **centralized security report aggregation server** that collects vulnerability scan results from multiple hosts and displays them in a unified dashboard.
 
-Think of it as a "security scan inbox" - clients run scans (Lynis, Trivy, Vulnix) and POST their results here. Sysadmins visit the dashboard to see the security posture of all their systems at a glance.
+Think of it as a "security scan inbox" - clients run scans (Lynis) and POST their results here along with system information (Neofetch). Sysadmins visit the dashboard to see the security posture of all their systems at a glance.
 
 ## Architecture Philosophy
 
@@ -34,9 +34,9 @@ Host System                    Honeybadger Server
 ┌────────────┐                ┌──────────────────┐
 │            │                │                  │
 │  Lynis ────┼───┐            │   ┌──────────┐   │
-│  Trivy ────┼───┼── POST ───▶│   │Validation│   │
-│  Vulnix ───┼───┤            │   └────┬─────┘   │
-│  Neofetch ─┼───┘            │        │         │
+│  Neofetch ─┼───┼── POST ───▶│   │Validation│   │
+│            │   │            │   └────┬─────┘   │
+│            │   │            │        │         │
 │            │                │        ▼         │
 └────────────┘                │   ┌──────────┐   │
                               │   │ Storage  │   │
@@ -54,8 +54,6 @@ Sysadmin Browser              │   ┌──────────┐   │
 | Type | Purpose | Target Systems |
 |------|---------|----------------|
 | **Lynis** | System hardening audit | All Linux/Unix |
-| **Trivy** | Container/OS vulnerabilities | Docker/Kubernetes hosts |
-| **Vulnix** | NixOS-specific vulnerabilities | NixOS systems |
 | **Neofetch** | System metadata/identity | All (required!) |
 
 ### The "OK" Logic
@@ -63,11 +61,8 @@ Sysadmin Browser              │   ┌──────────┐   │
 A system is marked **OK** (green) if it has:
 - **Neofetch** (always required - provides system identity)
 - **AND** Lynis (system audit - always needed)
-- **AND** Either:
-  - Trivy (for container/traditional systems)
-  - **OR** Vulnix (for NixOS)
 
-**Rationale:** Different systems need different scanners, but all need baseline hardening (Lynis) and identity (Neofetch).
+**Rationale:** For ISO compliance, systems need baseline hardening audit (Lynis) and identity (Neofetch).
 
 ## File Locations
 

@@ -330,7 +330,7 @@ class ReportHandler(BaseHTTPRequestHandler):
 
     def validate_report_type(self, report_type):
         """Validate that the report type is supported"""
-        valid_types = ['lynis', 'trivy', 'vulnix', 'neofetch']
+        valid_types = ['lynis', 'neofetch']
         if report_type.lower() not in valid_types:
             return False, f"Invalid report type '{report_type}'. Supported types: {', '.join(valid_types)}"
         return True, None
@@ -347,21 +347,6 @@ class ReportHandler(BaseHTTPRequestHandler):
             if 'report_version' not in data and 'lynis_version' not in data:
                 logger.warning("Lynis report may be invalid: missing 'report_version' or 'lynis_version' field")
             # Note: We log a warning but don't fail, to allow for different Lynis versions
-
-        # Trivy validation
-        elif report_type_lower == 'trivy':
-            if not isinstance(data, dict):
-                return False, "Invalid Trivy report: must be a JSON object"
-            required_fields = ['SchemaVersion', 'ArtifactName']
-            missing_fields = [field for field in required_fields if field not in data]
-            if missing_fields:
-                return False, f"Invalid Trivy report: missing required fields: {', '.join(missing_fields)}"
-
-        # Vulnix validation
-        elif report_type_lower == 'vulnix':
-            # Vulnix reports should be a list or dict
-            if not isinstance(data, (dict, list)):
-                return False, "Invalid Vulnix report: must be a JSON object or array"
 
         # Neofetch validation
         elif report_type_lower == 'neofetch':
@@ -381,7 +366,7 @@ class ReportHandler(BaseHTTPRequestHandler):
         # Count reports
         total_reports = 0
         unique_hosts = set()
-        report_counts = {'lynis': 0, 'trivy': 0, 'vulnix': 0, 'neofetch': 0}
+        report_counts = {'lynis': 0, 'neofetch': 0}
 
         if storage_path.exists():
             for item in storage_path.iterdir():
@@ -398,10 +383,6 @@ class ReportHandler(BaseHTTPRequestHandler):
                     # Count report types
                     if (item / 'lynis-report.json').exists():
                         report_counts['lynis'] += 1
-                    if (item / 'trivy-report.json').exists():
-                        report_counts['trivy'] += 1
-                    if (item / 'vulnix-report.json').exists():
-                        report_counts['vulnix'] += 1
                     if (item / 'neofetch-report.json').exists():
                         report_counts['neofetch'] += 1
 
@@ -527,10 +508,6 @@ class ReportHandler(BaseHTTPRequestHandler):
         # Determine filename based on report type
         if report_type_lower == 'lynis':
             filename = 'lynis-report.json'
-        elif report_type_lower == 'trivy':
-            filename = 'trivy-report.json'
-        elif report_type_lower == 'vulnix':
-            filename = 'vulnix-report.json'
         elif report_type_lower == 'neofetch':
             filename = 'neofetch-report.json'
         else:
@@ -621,8 +598,6 @@ class ReportHandler(BaseHTTPRequestHandler):
 
             # Check which reports exist
             has_lynis = (item / 'lynis-report.json').exists()
-            has_trivy = (item / 'trivy-report.json').exists()
-            has_vulnix = (item / 'vulnix-report.json').exists()
             has_neofetch = (item / 'neofetch-report.json').exists()
 
             reports.append({
@@ -631,8 +606,6 @@ class ReportHandler(BaseHTTPRequestHandler):
                 'date': date_str,
                 'last_update': last_update,
                 'has_lynis': has_lynis,
-                'has_trivy': has_trivy,
-                'has_vulnix': has_vulnix,
                 'has_neofetch': has_neofetch,
                 'path': str(item)
             })
@@ -1137,14 +1110,6 @@ class ReportHandler(BaseHTTPRequestHandler):
                 <div class="stat-label">Lynis reports</div>
             </div>
             <div class="stat-card">
-                <div class="stat-number">""" + str(sum(1 for r in reports if r['has_trivy'])) + """</div>
-                <div class="stat-label">Trivy reports</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">""" + str(sum(1 for r in reports if r['has_vulnix'])) + """</div>
-                <div class="stat-label">Vulnix reports</div>
-            </div>
-            <div class="stat-card">
                 <div class="stat-number">""" + str(sum(1 for r in reports if r['has_neofetch'])) + """</div>
                 <div class="stat-label">Neofetch reports</div>
             </div>
@@ -1183,13 +1148,8 @@ class ReportHandler(BaseHTTPRequestHandler):
 
             now = datetime.now()
             for report in reports:
-                # Determine status: OK if neofetch is present AND ((lynis + trivy) OR (lynis + vulnix))
-                has_valid_combination = (
-                    report['has_neofetch'] and (
-                        (report['has_lynis'] and report['has_trivy']) or
-                        (report['has_lynis'] and report['has_vulnix'])
-                    )
-                )
+                # Determine status: OK if both neofetch and lynis are present
+                has_valid_combination = report['has_neofetch'] and report['has_lynis']
 
                 status_text = 'OK' if has_valid_combination else 'NOK'
                 status_class = 'status-ok' if has_valid_combination else 'status-nok'
@@ -1211,19 +1171,13 @@ class ReportHandler(BaseHTTPRequestHandler):
                 if report['has_lynis']:
                     lynis_url = f"/reports/{dir_name}/lynis-report.json"
                     reports_badges.append(f'<a href="{lynis_url}" class="badge badge-success" target="_blank">Lynis</a>')
-                if report['has_trivy']:
-                    trivy_url = f"/reports/{dir_name}/trivy-report.json"
-                    reports_badges.append(f'<a href="{trivy_url}" class="badge badge-success" target="_blank">Trivy</a>')
-                if report['has_vulnix']:
-                    vulnix_url = f"/reports/{dir_name}/vulnix-report.json"
-                    reports_badges.append(f'<a href="{vulnix_url}" class="badge badge-success" target="_blank">Vulnix</a>')
                 if report['has_neofetch']:
                     neofetch_url = f"/reports/{dir_name}/neofetch-report.json"
                     reports_badges.append(f'<a href="{neofetch_url}" class="badge badge-success" target="_blank">Neofetch</a>')
                 else:
                     # Show red badge if neofetch is missing (it's required)
                     reports_badges.append('<span class="badge badge-danger">Missing Neofetch</span>')
-                if not any([report['has_lynis'], report['has_trivy'], report['has_vulnix'], report['has_neofetch']]):
+                if not any([report['has_lynis'], report['has_neofetch']]):
                     reports_badges = ['<span class="badge badge-secondary">None</span>']
 
                 html += f"""

@@ -30,8 +30,6 @@ Content-Type: application/json
     "unique_hosts": 15,
     "reports_by_type": {
       "lynis": 40,
-      "trivy": 35,
-      "vulnix": 20,
       "neofetch": 38
     }
   },
@@ -86,13 +84,30 @@ Directory: webserver01-admin-20260316
               hostname    user    date
 ```
 
-### Reports by Type
+### Requirement: Reports by Type Statistics
 
-For each report directory, check file existence:
-- `lynis-report.json` exists → increment `reports_by_type.lynis`
-- `trivy-report.json` exists → increment `reports_by_type.trivy`
-- `vulnix-report.json` exists → increment `reports_by_type.vulnix`
-- `neofetch-report.json` exists → increment `reports_by_type.neofetch`
+The health endpoint SHALL return counts of each supported report type found in storage.
+
+```json
+{
+  "statistics": {
+    "reports_by_type": {
+      "lynis": 40,
+      "neofetch": 38
+    }
+  }
+}
+```
+
+#### Scenario: Report type counting
+- **WHEN** health endpoint is requested
+- **THEN** response includes counts for:
+  - `lynis`: number of directories containing `lynis-report.json`
+  - `neofetch`: number of directories containing `neofetch-report.json`
+
+#### Scenario: Zero reports of a type
+- **WHEN** no directories contain a specific report type
+- **THEN** that report type's count is 0 in the response
 
 **Note:** One directory can contribute to multiple report type counts.
 
