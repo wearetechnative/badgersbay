@@ -258,3 +258,11 @@ When proposing changes, consider:
 - Specs: See `openspec/specs/` for detailed capability docs
 - Bugfixes: See `BUGFIXES.md` for documented bug fixes and their resolutions
 - Code: Read `honeybadger_server.py` - it's only 837 lines!
+
+## Git Commit Guidelines
+
+**IMPORTANT:** Never mention AI assistance in commit messages:
+- **DO NOT** add "Co-Authored-By: Claude" or similar attributions
+- **DO NOT** mention "AI-generated", "AI-assisted", or "Claude" anywhere in commit messages
+- Commit messages should reflect the technical changes only
+- Keep commits professional and focused on the work itself
