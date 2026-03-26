@@ -43,13 +43,13 @@ curl -X POST http://server:7123/ \
 |-------|--------|----------|-------------|
 | `hostname` | Header `X-Hostname` or JSON `hostname` | Yes | Hostname of scanned machine |
 | `username` | Header `X-Username` or JSON `username` | Yes | User who performed scan |
-| `report_type` | Header `X-Report-Type` or JSON `report_type` | Yes | Report type: lynis, neofetch |
+| `report_type` | Header `X-Report-Type` or JSON `report_type` | Yes | Report type: lynis, neofetch, trivy, vulnix |
 
 ## Validation Rules
 
 ### Requirement: Report Type Validation
 
-The server SHALL accept only `lynis` and `neofetch` report types (case-insensitive).
+The server SHALL accept `lynis`, `neofetch`, `trivy`, and `vulnix` report types (case-insensitive).
 
 #### Scenario: Valid Lynis report type
 - **WHEN** client submits report with `X-Report-Type: lynis`
@@ -59,13 +59,17 @@ The server SHALL accept only `lynis` and `neofetch` report types (case-insensiti
 - **WHEN** client submits report with `X-Report-Type: neofetch`
 - **THEN** server accepts the report for validation
 
-#### Scenario: Invalid Trivy report type
+#### Scenario: Valid Trivy report type
 - **WHEN** client submits report with `X-Report-Type: trivy`
-- **THEN** server responds with HTTP 400 and message "Invalid report type 'trivy'. Supported types: lynis, neofetch"
+- **THEN** server accepts the report for validation
 
-#### Scenario: Invalid Vulnix report type
+#### Scenario: Valid Vulnix report type
 - **WHEN** client submits report with `X-Report-Type: vulnix`
-- **THEN** server responds with HTTP 400 and message "Invalid report type 'vulnix'. Supported types: lynis, neofetch"
+- **THEN** server accepts the report for validation
+
+#### Scenario: Invalid unknown report type
+- **WHEN** client submits report with `X-Report-Type: unknown`
+- **THEN** server responds with HTTP 400 and message "Invalid report type 'unknown'. Supported types: lynis, neofetch, trivy, vulnix"
 
 #### Scenario: Case insensitive type matching
 - **WHEN** client submits report with `X-Report-Type: LYNIS`
@@ -95,6 +99,20 @@ All reports must be valid JSON. Malformed JSON returns HTTP 400.
 - `system`
 
 **Note:** At least one system info field should be present
+
+#### Trivy Reports
+
+**Expected fields:**
+- `Results` (array) OR `ArtifactName` (string)
+
+**Behavior:** Warning logged if neither field present, but report accepted (allows format flexibility)
+
+#### Vulnix Reports
+
+**Expected fields:**
+- `vulnerabilities` (array)
+
+**Behavior:** Warning logged if missing, but report accepted (allows version flexibility)
 
 ## Response Format
 
