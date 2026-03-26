@@ -178,6 +178,20 @@ if not str(full_path).startswith(str(storage_path)):
 - Security check: `honeybadger_server.py:do_GET()` (line 759-765)
 - Directory creation: `run_server()` (line 802)
 
+## ADDED Requirements
+
+### Requirement: Store OS type metadata
+
+The system SHALL store OS type metadata when provided by client.
+
+#### Scenario: OS type from X-OS-Type header
+- **WHEN** client uploads with header `X-OS-Type: nixos`
+- **THEN** system stores os_type metadata associated with the system
+
+#### Scenario: Missing OS type header
+- **WHEN** client uploads without X-OS-Type header
+- **THEN** system stores os_type as "unknown"
+
 ## Disk Usage Considerations
 
 - **No cleanup mechanism** - reports accumulate indefinitely
