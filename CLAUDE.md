@@ -109,6 +109,31 @@ The single Python file is organized as:
 
 **Key pattern:** No classes except `Config` and `ReportHandler`. Pure functions for logic.
 
+## CLI Arguments and Config Loading
+
+The server supports flexible configuration file location via CLI arguments:
+
+**Arguments:**
+- `--config PATH`: Specify custom config file location
+- `--version`: Display version information
+- `--help`: Show usage information
+
+**Config File Search Order (when --config not provided):**
+1. Current working directory (`./config.yaml`)
+2. Script directory (same directory as honeybadger_server.py)
+3. System location (`/etc/honeybadger/config.yaml`)
+
+**Implementation:**
+- `parse_arguments()`: Argparse-based CLI parsing
+- `find_config_file(cli_config_path)`: Config discovery with fallback chain
+- `main()`: Integrates argument parsing before config loading
+
+**Use cases:**
+- **Per-instance configs**: Run from different directories with their own config.yaml
+- **System-wide install**: Script in /usr/local/bin/, config in /etc/honeybadger/
+- **Containerized**: Volume-mount config at custom location with --config
+- **Backward compatible**: No CLI args = searches script directory (legacy behavior)
+
 ## Storage Layout
 
 ```

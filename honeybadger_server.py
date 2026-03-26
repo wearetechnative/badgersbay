@@ -3,12 +3,15 @@
 Honeybadger Server - Receives Lynis and Trivy JSON reports via HTTP
 """
 
+VERSION = "1.1.0"
+
 import json
 import os
 import yaml
 import time
 import tarfile
 import io
+import argparse
 from datetime import datetime
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -1641,15 +1644,108 @@ def run_server(config):
         httpd.shutdown()
 
 
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        prog='honeybadger_server',
+        description='Honeybadger Server - Centralized security report aggregation'
+    )
+
+    parser.add_argument(
+        '--config',
+        metavar='PATH',
+        type=str,
+        help='Path to configuration file (default: search in working dir, script dir, /etc/honeybadger/)'
+    )
+
+    parser.add_argument(
+        '--version',
+        action='version',
+        version=f'honeybadger-server version {VERSION}'
+    )
+
+    return parser.parse_args()
+
+
+def find_config_file(cli_config_path=None):
+    """Find configuration file using fallback search order
+
+    Search order:
+    1. CLI argument (--config)
+    2. Current working directory
+    3. Script directory
+    4. /etc/honeybadger/
+
+    Args:
+        cli_config_path: Optional path from --config argument
+
+    Returns:
+        Path: Absolute path to configuration file
+
+    Exits:
+        Exit code 1 if config file not found or not readable
+    """
+    searched_locations = []
+
+    # 1. CLI argument (highest priority)
+    if cli_config_path:
+        config_path = Path(cli_config_path).expanduser().resolve()
+        searched_locations.append(str(config_path))
+
+        if config_path.exists():
+            return config_path
+        else:
+            logger.error(f"Configuration file not found: {config_path}")
+            logger.error(f"Searched location: {config_path}")
+            exit(1)
+
+    # 2. Current working directory
+    cwd_config = Path.cwd() / 'config.yaml'
+    searched_locations.append(str(cwd_config))
+    if cwd_config.exists():
+        return cwd_config
+
+    # 3. Script directory (legacy/backward compatibility)
+    script_config = Path(__file__).parent / 'config.yaml'
+    searched_locations.append(str(script_config))
+    if script_config.exists():
+        return script_config
+
+    # 4. System-wide location
+    system_config = Path('/etc/honeybadger/config.yaml')
+    searched_locations.append(str(system_config))
+    if system_config.exists():
+        return system_config
+
+    # No config found anywhere
+    logger.error("Configuration file not found in any location")
+    logger.error("Searched locations:")
+    for location in searched_locations:
+        logger.error(f"  - {location}")
+    exit(1)
+
+
 def main():
     """Main entry point"""
     try:
+        # Parse command line arguments
+        args = parse_arguments()
+
+        # Find configuration file
+        config_path = find_config_file(args.config)
+
         # Load configuration
-        config = Config()
+        config = Config(str(config_path))
 
         # Start server
         run_server(config)
 
+    except yaml.YAMLError as e:
+        logger.error(f"Invalid YAML syntax in configuration file: {e}")
+        return 1
+    except ValueError as e:
+        logger.error(f"Configuration validation error: {e}")
+        return 1
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         return 1

@@ -18,6 +18,78 @@ pip install -r requirements.txt
 
 The server runs in **compliance mode** by default (see `config.yaml`), tracking endpoint audits for ISO requirements. To use legacy mode instead, set `compliance.enabled: false` in the config.
 
+## CLI Arguments
+
+The server supports command line arguments for flexible configuration:
+
+```bash
+# Display help
+./honeybadger_server.py --help
+
+# Display version
+./honeybadger_server.py --version
+
+# Specify custom config file
+./honeybadger_server.py --config /etc/honeybadger/config.yaml
+
+# Use config from custom location
+./honeybadger_server.py --config ~/my-configs/honeybadger.yaml
+```
+
+### Config File Search Order
+
+When no `--config` argument is provided, the server searches for `config.yaml` in the following order:
+
+1. **Current working directory** (`./config.yaml`)
+2. **Script directory** (same directory as `honeybadger_server.py`)
+3. **System location** (`/etc/honeybadger/config.yaml`)
+
+The first file found is used. This allows flexible deployment:
+- **Per-instance configs**: Different working directories with their own `config.yaml`
+- **System-wide installation**: Config in `/etc/honeybadger/` when script is in `/usr/local/bin/`
+- **Traditional setup**: Config alongside script (backward compatible)
+
+### Deployment Examples
+
+**Systemd service** (system-wide config):
+```ini
+[Unit]
+Description=Honeybadger Report Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/honeybadger_server.py --config /etc/honeybadger/config.yaml
+Restart=on-failure
+User=honeybadger
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Docker container** (volume-mounted config):
+```dockerfile
+FROM python:3.11-slim
+
+# Install dependencies
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Copy server
+COPY honeybadger_server.py /app/
+
+WORKDIR /app
+EXPOSE 7123
+
+# Config provided via volume mount at /config/config.yaml
+CMD ["python", "honeybadger_server.py", "--config", "/config/config.yaml"]
+```
+
+```bash
+# Run with custom config
+docker run -v /path/to/config.yaml:/config/config.yaml -p 7123:7123 honeybadger
+```
+
 ## Configuration
 
 Edit `config.yaml`:
