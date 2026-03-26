@@ -12,6 +12,8 @@ import time
 import tarfile
 import io
 import argparse
+import secrets
+import base64
 from datetime import datetime
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -24,6 +26,114 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Global variables for authentication credentials (loaded at startup)
+VALID_TOKENS = []
+DASHBOARD_PASSWORD = ""
+
+
+def load_token_file(token_file_path):
+    """Load valid API tokens from YAML file
+
+    Args:
+        token_file_path: Path to YAML file containing tokens
+
+    Returns:
+        list: List of valid token strings
+
+    Raises:
+        FileNotFoundError: If token file doesn't exist
+        yaml.YAMLError: If YAML is invalid
+        ValueError: If token file has wrong structure or is empty
+    """
+    token_path = Path(token_file_path)
+
+    # Check file exists
+    if not token_path.exists():
+        raise FileNotFoundError(f"Token file not found: {token_file_path}")
+
+    # Check file is readable
+    if not os.access(token_path, os.R_OK):
+        raise PermissionError(f"Cannot read token file: {token_file_path}")
+
+    # Read and parse YAML
+    with open(token_path, 'r') as f:
+        data = yaml.safe_load(f)
+
+    # Validate structure
+    if not isinstance(data, dict):
+        raise ValueError(f"Token file must be a YAML object with 'tokens' key")
+
+    if 'tokens' not in data:
+        raise ValueError(f"Token file missing 'tokens' key")
+
+    tokens = data['tokens']
+
+    if not isinstance(tokens, list):
+        raise ValueError(f"Token file 'tokens' must be a list")
+
+    if len(tokens) == 0:
+        raise ValueError(f"Token file contains no tokens")
+
+    # Trim whitespace and validate tokens
+    cleaned_tokens = []
+    for token in tokens:
+        if not isinstance(token, str):
+            raise ValueError(f"All tokens must be strings")
+
+        cleaned = token.strip()
+        if not cleaned:
+            raise ValueError(f"Token file contains empty string token")
+
+        cleaned_tokens.append(cleaned)
+
+    return cleaned_tokens
+
+
+def load_password_file(password_file_path):
+    """Load dashboard password from plaintext file
+
+    Args:
+        password_file_path: Path to plaintext file containing password
+
+    Returns:
+        str: Dashboard password (trimmed)
+
+    Raises:
+        FileNotFoundError: If password file doesn't exist
+        ValueError: If password file is empty
+    """
+    password_path = Path(password_file_path)
+
+    # Check file exists
+    if not password_path.exists():
+        raise FileNotFoundError(f"Dashboard password file not found: {password_file_path}")
+
+    # Check file is readable
+    if not os.access(password_path, os.R_OK):
+        raise PermissionError(f"Cannot read dashboard password file: {password_file_path}")
+
+    # Read file content
+    with open(password_path, 'r') as f:
+        content = f.read()
+
+    # Split into lines and get first line
+    lines = content.splitlines()
+
+    if not lines:
+        raise ValueError(f"Dashboard password file is empty")
+
+    # Get first line and trim whitespace
+    password = lines[0].strip()
+
+    if not password:
+        raise ValueError(f"Dashboard password file is empty (contains only whitespace)")
+
+    # Warn if multiple lines
+    if len(lines) > 1:
+        logger.warning(f"Dashboard password file contains multiple lines, using first line only")
+
+    return password
 
 
 class ComplianceCache:
@@ -78,6 +188,8 @@ class ComplianceCache:
                 # Check which reports exist
                 reports = []
                 upload_date = None
+
+                # Scan for JSON report files
                 for report_file in system_dir.glob('*.json'):
                     report_name = report_file.stem.replace('-report', '')
                     reports.append(report_name)
@@ -86,6 +198,17 @@ class ComplianceCache:
                     file_date = datetime.fromtimestamp(mtime)
                     if upload_date is None or file_date > upload_date:
                         upload_date = file_date
+
+                # Check for tar.gz files
+                tar_files = list(system_dir.glob('*.tar.gz'))
+                if tar_files:
+                    reports.append('tar')
+                    # Update upload date with tar file mtime if newer
+                    for tar_file in tar_files:
+                        mtime = tar_file.stat().st_mtime
+                        file_date = datetime.fromtimestamp(mtime)
+                        if upload_date is None or file_date > upload_date:
+                            upload_date = file_date
 
                 # Check completeness
                 is_complete, missing = check_completeness(
@@ -332,6 +455,98 @@ class ReportHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         """Override to use custom logger"""
         logger.info("%s - %s" % (self.address_string(), format % args))
+
+    def _validate_bearer_token(self):
+        """Validate Bearer token from Authorization header
+
+        Returns:
+            bool: True if token is valid, False otherwise
+        """
+        auth_header = self.headers.get('Authorization', '')
+
+        if not auth_header.startswith('Bearer '):
+            return False
+
+        # Extract token (remove "Bearer " prefix)
+        token = auth_header[7:]
+
+        # Compare against all valid tokens using constant-time comparison
+        return any(secrets.compare_digest(token, valid_token) for valid_token in VALID_TOKENS)
+
+    def _validate_basic_auth(self):
+        """Validate HTTP Basic Authentication from Authorization header
+
+        Returns:
+            bool: True if password is valid, False otherwise
+        """
+        auth_header = self.headers.get('Authorization', '')
+
+        if not auth_header.startswith('Basic '):
+            return False
+
+        try:
+            # Extract and decode base64 credentials
+            encoded = auth_header[6:]  # Remove "Basic " prefix
+            decoded = base64.b64decode(encoded).decode('utf-8')
+
+            # Split on first colon to get username and password
+            # Username is ignored - only password matters
+            if ':' not in decoded:
+                return False
+
+            _, password = decoded.split(':', 1)
+
+            # Compare password using constant-time comparison
+            return secrets.compare_digest(password, DASHBOARD_PASSWORD)
+
+        except Exception:
+            # Malformed header or decode error
+            return False
+
+    def _send_json_error(self, code, message):
+        """Send JSON error response for API endpoints
+
+        Args:
+            code: HTTP status code
+            message: Error message
+        """
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps({'error': message}).encode())
+
+    def _send_html_error(self, code, message, include_auth_header=False):
+        """Send HTML error response for dashboard endpoints
+
+        Args:
+            code: HTTP status code
+            message: Error message
+            include_auth_header: Whether to include WWW-Authenticate header
+        """
+        self.send_response(code)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+
+        if include_auth_header and code == 401:
+            self.send_header('WWW-Authenticate', 'Basic realm="Honeybadger Dashboard"')
+
+        self.end_headers()
+
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Authentication Required</title>
+    <style>
+        body {{ font-family: sans-serif; padding: 40px; text-align: center; }}
+        h1 {{ color: #dc3545; }}
+        p {{ color: #666; }}
+    </style>
+</head>
+<body>
+    <h1>{code} {message}</h1>
+    <p>Please provide valid credentials to access the dashboard.</p>
+</body>
+</html>"""
+        self.wfile.write(html.encode())
 
     def validate_report_type(self, report_type):
         """Validate that the report type is supported"""
@@ -601,6 +816,17 @@ class ReportHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """Handle POST requests with JSON report data"""
+        # Validate Bearer token authentication
+        if not self._validate_bearer_token():
+            auth_header = self.headers.get('Authorization', '')
+            if not auth_header:
+                self._send_json_error(401, "Missing Authorization header")
+            elif not auth_header.startswith('Bearer '):
+                self._send_json_error(401, "Invalid Authorization header format. Expected: Bearer <token>")
+            else:
+                self._send_json_error(401, "Invalid authentication token")
+            return
+
         # Route to tar handler if path is /submit-tar
         if self.path == '/submit-tar':
             self.do_POST_submit_tar()
@@ -684,7 +910,7 @@ class ReportHandler(BaseHTTPRequestHandler):
             self.send_error(500, f"Internal server error: {str(e)}")
 
     def do_POST_submit_tar(self):
-        """Handle POST requests with tar archive containing multiple reports"""
+        """Handle POST requests with tar archive - saves tar.gz as-is without extraction"""
         try:
             # Get required headers
             hostname = self.headers.get('X-Hostname')
@@ -707,99 +933,71 @@ class ReportHandler(BaseHTTPRequestHandler):
                 return
 
             # Read request body
-            body = self.rfile.read(content_length)
+            tar_data = self.rfile.read(content_length)
 
-            # Extract and validate tar archive
-            success, result = self.extract_and_validate_tar(body, content_length)
-            if not success:
-                logger.error(f"Tar validation failed: {result}")
-                self.send_error(400, result)
+            # Basic validation: check if it's a valid tar file
+            try:
+                tarfile.open(fileobj=io.BytesIO(tar_data), mode='r:*')
+            except Exception as e:
+                self.send_error(400, f"Invalid tar archive: {str(e)}")
                 return
 
-            # Result is list of (filename, report_type, json_content)
-            reports = result
+            # Determine storage path based on compliance mode
+            if self.config.compliance_enabled:
+                # Calculate audit period
+                upload_date = datetime.now()
+                audit_period = get_audit_period(upload_date, self.config.audit_months)
 
-            # Process each report
-            results = []
-            success_count = 0
-            error_count = 0
-            os_type = self.headers.get('X-OS-Type', 'unknown')
-
-            for filename, report_type, json_content in reports:
-                try:
-                    # Validate report structure
-                    valid, error_msg = self.validate_report_structure(report_type, json_content)
-                    if not valid:
-                        results.append({
-                            'file': filename,
-                            'type': report_type,
-                            'status': 'error',
-                            'error': error_msg
-                        })
-                        error_count += 1
-                        continue
-
-                    # Save the report
-                    saved_path, audit_period = self.save_report(hostname, username, report_type, json_content, os_type)
-
-                    # Update compliance cache if enabled
-                    if self.config.compliance_enabled and self.compliance_cache:
-                        self.compliance_cache.update_system(
-                            audit_period, hostname, username, report_type.lower(), os_type
-                        )
-
-                    results.append({
-                        'file': filename,
-                        'type': report_type,
-                        'status': 'saved',
-                        'path': str(saved_path)
-                    })
-                    success_count += 1
-
-                except Exception as e:
-                    logger.error(f"Error processing {filename}: {e}")
-                    results.append({
-                        'file': filename,
-                        'type': report_type,
-                        'status': 'error',
-                        'error': str(e)
-                    })
-                    error_count += 1
-
-            # Determine HTTP status code
-            if success_count > 0 and error_count == 0:
-                # All succeeded
-                status_code = 200
-                status = 'success'
-                message = f"Processed {success_count} reports from tar archive"
-            elif success_count > 0 and error_count > 0:
-                # Partial success
-                status_code = 207  # Multi-Status
-                status = 'partial'
-                message = f"Processed {success_count}/{len(reports)} reports, {error_count} failed"
+                # Create directory path: {audit-period}/{hostname-username}/
+                dir_name = f"{hostname}-{username}"
+                dir_path = Path(self.config.storage_location) / audit_period / dir_name
             else:
-                # All failed
-                status_code = 400
-                status = 'error'
-                message = f"All {error_count} reports failed validation"
+                # Legacy mode: {hostname-username-YYYYMMDD}/
+                date_str = datetime.now().strftime('%Y%m%d')
+                dir_name = f"{hostname}-{username}-{date_str}"
+                dir_path = Path(self.config.storage_location) / dir_name
 
-            # Send response
-            self.send_response(status_code)
+            # Create directory if it doesn't exist
+            dir_path.mkdir(parents=True, exist_ok=True)
+
+            # Save tar file with timestamp to allow multiple uploads
+            timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+            tar_filename = f"submission-{timestamp}.tar.gz"
+            tar_path = dir_path / tar_filename
+
+            # Write tar data to file
+            with open(tar_path, 'wb') as f:
+                f.write(tar_data)
+
+            logger.info(f"Tar file saved: {tar_path} ({content_length} bytes)")
+
+            # Update compliance cache if enabled
+            if self.config.compliance_enabled and self.compliance_cache:
+                # Get OS type from X-OS-Type header if provided
+                os_type = self.headers.get('X-OS-Type', 'unknown')
+
+                # Update cache with 'tar' as report type
+                self.compliance_cache.update_system(
+                    audit_period, hostname, username, 'tar', os_type
+                )
+                logger.info(f"Cache updated: {audit_period}/{hostname}-{username} with tar report")
+
+            # Send success response
+            self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
 
             response = {
-                'status': status,
-                'message': message,
-                'results': results
+                'status': 'success',
+                'message': f"Tar archive saved successfully",
+                'path': str(tar_path),
+                'size': content_length
             }
 
             self.wfile.write(json.dumps(response, indent=2).encode())
 
-            logger.info(f"Tar submission processed: {success_count} success, {error_count} errors")
-
         except Exception as e:
-            logger.error(f"Error processing tar submission: {e}", exc_info=True)
+            logger.error(f"Error saving tar submission: {e}", exc_info=True)
             self.send_error(500, f"Internal server error: {str(e)}")
 
     def save_report(self, hostname, username, report_type, data, os_type='unknown'):
@@ -1014,8 +1212,44 @@ class ReportHandler(BaseHTTPRequestHandler):
         .status-icon {{ font-size: 16px; margin-right: 4px; }}
 
         .empty-state {{ text-align: center; padding: 60px 20px; color: #666; }}
+
+        .dashboard-header {{ display: flex; justify-content: space-between; align-items: center;
+                            margin-bottom: 20px; flex-wrap: wrap; gap: 15px; }}
+        .header-actions {{ display: flex; align-items: center; gap: 15px; }}
+        .refresh-btn {{ background: #0066cc; color: white; border: none;
+                       padding: 10px 20px; border-radius: 6px; cursor: pointer;
+                       font-size: 14px; font-weight: 500; display: flex;
+                       align-items: center; gap: 8px; transition: background 0.2s; }}
+        .refresh-btn:hover {{ background: #0052a3; }}
+        .refresh-btn:active {{ transform: scale(0.98); }}
+        .refresh-btn:disabled {{ opacity: 0.6; cursor: not-allowed; }}
+        .refresh-icon {{ display: inline-block; transition: transform 0.5s; }}
+        .refresh-btn.refreshing .refresh-icon {{ animation: spin 0.5s linear; }}
+        @keyframes spin {{ from {{ transform: rotate(0deg); }} to {{ transform: rotate(360deg); }} }}
+        .last-updated {{ color: #666; font-size: 13px; font-style: italic; }}
     </style>
     <script>
+        function refreshDashboard() {{
+            const btn = document.getElementById('refreshBtn');
+            btn.classList.add('refreshing');
+            btn.disabled = true;
+            location.reload();
+        }}
+
+        function updateTimestamp() {{
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+            const timestamp = hours + ':' + minutes + ':' + seconds;
+            const elem = document.getElementById('lastUpdated');
+            if (elem) {{
+                elem.textContent = 'Last updated: ' + timestamp;
+            }}
+        }}
+
+        document.addEventListener('DOMContentLoaded', updateTimestamp);
+
         function switchPeriod() {{
             const select = document.getElementById('periodSelect');
             const period = select.value;
@@ -1047,8 +1281,18 @@ class ReportHandler(BaseHTTPRequestHandler):
 </head>
 <body>
     <div class="container">
-        <h1>🦡 Honeybadger Compliance Dashboard</h1>
-        <div class="subtitle">Security Audit Compliance Tracking</div>
+        <div class="dashboard-header">
+            <div>
+                <h1>🦡 Honeybadger Compliance Dashboard</h1>
+                <div class="subtitle">Security Audit Compliance Tracking</div>
+            </div>
+            <div class="header-actions">
+                <button id="refreshBtn" class="refresh-btn" onclick="refreshDashboard()">
+                    <span class="refresh-icon">🔄</span> Refresh
+                </button>
+                <span id="lastUpdated" class="last-updated"></span>
+            </div>
+        </div>
 
         <div class="period-selector">
             <label for="periodSelect">Audit Period:</label>
@@ -1078,7 +1322,7 @@ class ReportHandler(BaseHTTPRequestHandler):
             </div>
             <div class="stat-card">
                 <div class="stat-number">{complete_pct:.0f}%</div>
-                <div class="stat-label">Compliance Rate</div>
+                <div class="stat-label">Coverage Rate</div>
             </div>
         </div>
 
@@ -1128,6 +1372,21 @@ class ReportHandler(BaseHTTPRequestHandler):
                         download_url = f"/reports/{selected_period}/{hostname}-{username}/{report_type}-report.json"
                         badges.append(f'<a href="{download_url}" class="badge badge-success" target="_blank">{badge_text}</a>')
 
+                # Check for tar files
+                if 'tar' in reports:
+                    try:
+                        # Find the tar file(s) to link to
+                        tar_dir = Path(self.config.storage_location) / selected_period / f"{hostname}-{username}"
+                        tar_files = list(tar_dir.glob('*.tar.gz'))
+                        if tar_files:
+                            # Link to most recent tar file
+                            tar_file = sorted(tar_files, key=lambda f: f.stat().st_mtime, reverse=True)[0]
+                            download_url = f"/reports/{selected_period}/{hostname}-{username}/{tar_file.name}"
+                            badges.append(f'<a href="{download_url}" class="badge badge-success" target="_blank">TAR</a>')
+                    except Exception as e:
+                        logger.error(f"Error generating TAR badge for {hostname}-{username}: {e}")
+                        badges.append('<span class="badge badge-danger">TAR?</span>')
+
                 badges_html = ''.join(badges) if badges else '<span class="badge badge-danger">None</span>'
 
                 # Status column
@@ -1153,9 +1412,37 @@ class ReportHandler(BaseHTTPRequestHandler):
         </div>
 
         <div style="margin-top: 20px; text-align: center; color: #666; font-size: 12px;">
-            Legend: N=Neofetch, L=Lynis, T=Trivy, V=Vulnix
+            Legend: N=Neofetch, L=Lynis, T=Trivy, V=Vulnix, TAR=Tar Archive
         </div>
     </div>
+
+    <script>
+        // Period selector
+        function switchPeriod() {
+            var period = document.getElementById('periodSelect').value;
+            window.location.href = '/?period=' + period;
+        }
+
+        // Filter functionality
+        function filterTable() {
+            var statusFilter = document.getElementById('statusFilter').value;
+            var table = document.getElementById('complianceTable');
+            var rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
+
+            for (var i = 0; i < rows.length; i++) {
+                var row = rows[i];
+                var statusCell = row.cells[5]; // Status column
+
+                if (statusFilter === 'all') {
+                    row.style.display = '';
+                } else if (statusFilter === 'complete') {
+                    row.style.display = statusCell.textContent.includes('Complete') ? '' : 'none';
+                } else if (statusFilter === 'incomplete') {
+                    row.style.display = statusCell.textContent.includes('Incomplete') ? '' : 'none';
+                }
+            }
+        }
+    </script>
 </body>
 </html>"""
 
@@ -1373,8 +1660,92 @@ class ReportHandler(BaseHTTPRequestHandler):
             padding: 40px 20px;
             color: #666;
         }
+
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .refresh-btn {
+            background: #0066cc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.2s;
+        }
+
+        .refresh-btn:hover {
+            background: #0052a3;
+        }
+
+        .refresh-btn:active {
+            transform: scale(0.98);
+        }
+
+        .refresh-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .refresh-icon {
+            display: inline-block;
+            transition: transform 0.5s;
+        }
+
+        .refresh-btn.refreshing .refresh-icon {
+            animation: spin 0.5s linear;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .last-updated {
+            color: #666;
+            font-size: 13px;
+            font-style: italic;
+        }
     </style>
     <script>
+        function refreshDashboard() {
+            const btn = document.getElementById('refreshBtn');
+            btn.classList.add('refreshing');
+            btn.disabled = true;
+            location.reload();
+        }
+
+        function updateTimestamp() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+            const timestamp = hours + ':' + minutes + ':' + seconds;
+            const elem = document.getElementById('lastUpdated');
+            if (elem) {
+                elem.textContent = 'Last updated: ' + timestamp;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', updateTimestamp);
+
         function filterTable() {
             const input = document.getElementById('searchInput');
             const filter = input.value.toLowerCase();
@@ -1405,16 +1776,22 @@ class ReportHandler(BaseHTTPRequestHandler):
                 noResults.style.display = 'none';
             }
         }
-
-        setTimeout(function() {
-            location.reload();
-        }, 30000);
     </script>
 </head>
 <body>
     <div class="container">
-        <h1>Honeybadger Server</h1>
-        <div class="subtitle">Security Reports Dashboard</div>
+        <div class="dashboard-header">
+            <div>
+                <h1>Honeybadger Server</h1>
+                <div class="subtitle">Security Reports Dashboard</div>
+            </div>
+            <div class="header-actions">
+                <button id="refreshBtn" class="refresh-btn" onclick="refreshDashboard()">
+                    <span class="refresh-icon">🔄</span> Refresh
+                </button>
+                <span id="lastUpdated" class="last-updated"></span>
+            </div>
+        </div>
 
         <div class="stats">
             <div class="stat-card">
@@ -1518,9 +1895,6 @@ class ReportHandler(BaseHTTPRequestHandler):
 """
 
         html += """
-        <div class="refresh-info">
-            Page automatically refreshes every 30 seconds
-        </div>
     </div>
 </body>
 </html>
@@ -1536,22 +1910,8 @@ class ReportHandler(BaseHTTPRequestHandler):
         path = parsed_url.path
         query_params = parse_qs(parsed_url.query)
 
-        if path == '/' or path == '/status':
-            # Dashboard page - check compliance mode
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
-            self.end_headers()
-
-            if self.config.compliance_enabled:
-                # Compliance dashboard
-                selected_period = query_params.get('period', [None])[0]
-                html = self.generate_compliance_dashboard_html(selected_period)
-            else:
-                # Legacy dashboard
-                html = self.generate_status_html()
-
-            self.wfile.write(html.encode('utf-8'))
-        elif self.path == '/health':
+        # Skip authentication for /health endpoint
+        if path == '/health':
             # Health check with monitoring information
             try:
                 health_data = self.get_health_status()
@@ -1571,6 +1931,33 @@ class ReportHandler(BaseHTTPRequestHandler):
                     'error': str(e)
                 }
                 self.wfile.write(json.dumps(error_response).encode())
+            return
+
+        # Validate Basic Authentication for all other GET endpoints
+        if not self._validate_basic_auth():
+            self._send_html_error(401, "Unauthorized", include_auth_header=True)
+            return
+
+        if path == '/' or path == '/status':
+            # Dashboard page - check compliance mode
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.end_headers()
+
+            if self.config.compliance_enabled:
+                # Compliance dashboard
+                selected_period = query_params.get('period', [None])[0]
+                html = self.generate_compliance_dashboard_html(selected_period)
+                logger.info(f"Generated compliance dashboard HTML: {len(html)} chars")
+            else:
+                # Legacy dashboard
+                html = self.generate_status_html()
+                logger.info(f"Generated legacy dashboard HTML: {len(html)} chars")
+
+            encoded = html.encode('utf-8')
+            logger.info(f"Encoded to {len(encoded)} bytes, writing to client...")
+            self.wfile.write(encoded)
+            logger.info("Dashboard sent successfully")
         elif self.path.startswith('/reports/'):
             # Serve report JSON files
             try:
@@ -1591,9 +1978,9 @@ class ReportHandler(BaseHTTPRequestHandler):
                     self.send_error(404, "Report not found")
                     return
 
-                # Read and serve the JSON file
-                with open(full_path, 'r') as f:
-                    content = f.read()
+                # Determine file type and content type
+                is_json = full_path.suffix == '.json'
+                is_tar = full_path.suffix == '.gz' or full_path.name.endswith('.tar.gz')
 
                 # Create download filename: <folder>-<report>.json
                 # e.g., testserver01-testuser-20260316-lynis-report.json
@@ -1602,10 +1989,29 @@ class ReportHandler(BaseHTTPRequestHandler):
                 download_filename = f"{folder_name}-{report_name}"
 
                 self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
+
+                # Set content type based on file type
+                if is_json:
+                    self.send_header('Content-Type', 'application/json')
+                    # Read as text
+                    with open(full_path, 'r') as f:
+                        content = f.read()
+                    content_bytes = content.encode('utf-8')
+                elif is_tar:
+                    self.send_header('Content-Type', 'application/gzip')
+                    # Read as binary
+                    with open(full_path, 'rb') as f:
+                        content_bytes = f.read()
+                else:
+                    self.send_header('Content-Type', 'application/octet-stream')
+                    # Read as binary for unknown types
+                    with open(full_path, 'rb') as f:
+                        content_bytes = f.read()
+
                 self.send_header('Content-Disposition', f'attachment; filename="{download_filename}"')
+                self.send_header('Content-Length', str(len(content_bytes)))
                 self.end_headers()
-                self.wfile.write(content.encode('utf-8'))
+                self.wfile.write(content_bytes)
 
             except Exception as e:
                 logger.error(f"Error serving report: {e}", exc_info=True)
@@ -1656,6 +2062,22 @@ def parse_arguments():
         metavar='PATH',
         type=str,
         help='Path to configuration file (default: search in working dir, script dir, /etc/honeybadger/)'
+    )
+
+    parser.add_argument(
+        '--token-file',
+        metavar='PATH',
+        type=str,
+        required=True,
+        help='Path to YAML file containing valid API tokens (format: tokens: [token1, token2]). Example: --token-file /etc/honeybadger/tokens.yaml'
+    )
+
+    parser.add_argument(
+        '--dashboard-password-file',
+        metavar='PATH',
+        type=str,
+        required=True,
+        help='Path to plaintext file containing dashboard password. Example: --dashboard-password-file /etc/honeybadger/password.txt'
     )
 
     parser.add_argument(
@@ -1727,6 +2149,8 @@ def find_config_file(cli_config_path=None):
 
 def main():
     """Main entry point"""
+    global VALID_TOKENS, DASHBOARD_PASSWORD
+
     try:
         # Parse command line arguments
         args = parse_arguments()
@@ -1736,6 +2160,30 @@ def main():
 
         # Load configuration
         config = Config(str(config_path))
+
+        # Load authentication credentials before starting server
+        try:
+            logger.info("Loading authentication credentials...")
+            VALID_TOKENS = load_token_file(args.token_file)
+            DASHBOARD_PASSWORD = load_password_file(args.dashboard_password_file)
+            logger.info(f"Loaded {len(VALID_TOKENS)} token(s) and dashboard password")
+        except FileNotFoundError as e:
+            logger.error(str(e))
+            logger.error("Please check that the file exists and the path is correct")
+            return 1
+        except PermissionError as e:
+            logger.error(str(e))
+            logger.error("Please check file permissions")
+            return 1
+        except yaml.YAMLError as e:
+            logger.error(f"Invalid YAML syntax in token file: {e}")
+            if hasattr(e, 'problem_mark'):
+                mark = e.problem_mark
+                logger.error(f"Error at line {mark.line + 1}, column {mark.column + 1}")
+            return 1
+        except ValueError as e:
+            logger.error(f"Authentication file validation error: {e}")
+            return 1
 
         # Start server
         run_server(config)

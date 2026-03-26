@@ -1,564 +1,408 @@
-<img src="images/badgersbay-github.png" />
-
 # Honeybadger Server
 
-A central server for collecting and storing Lynis, Trivy, Vulnix, and Neofetch (system info) reports with built-in ISO compliance tracking.
+Centralized security report aggregation server for collecting vulnerability scan results from multiple hosts.
 
 ## Quick Start
 
+### Prerequisites
+
+- Python 3.7+
+- PyYAML
+
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Start the server
-./honeybadger_server.py
 ```
 
-**Compliance dashboard:** Open `http://localhost:7123/` in your browser
+### Authentication Setup (Required)
 
-The server runs in **compliance mode** by default (see `config.yaml`), tracking endpoint audits for ISO requirements. To use legacy mode instead, set `compliance.enabled: false` in the config.
+**BREAKING CHANGE**: As of version 1.1.0, authentication is mandatory. The server will not start without auth files.
 
-## CLI Arguments
+Create two authentication files:
 
-The server supports command line arguments for flexible configuration:
+**1. Token file (YAML format)**
+```bash
+cat > tokens.yaml <<EOF
+tokens:
+  - hb_token_$(openssl rand -hex 16)
+  - hb_token_$(openssl rand -hex 16)
+EOF
+```
+
+**2. Password file (plaintext)**
+```bash
+openssl rand -base64 24 > password.txt
+```
+
+### Start Server
 
 ```bash
-# Display help
-./honeybadger_server.py --help
-
-# Display version
-./honeybadger_server.py --version
-
-# Specify custom config file
-./honeybadger_server.py --config /etc/honeybadger/config.yaml
-
-# Use config from custom location
-./honeybadger_server.py --config ~/my-configs/honeybadger.yaml
+./honeybadger_server.py \
+  --token-file tokens.yaml \
+  --dashboard-password-file password.txt
 ```
 
-### Config File Search Order
+The server will:
+1. Load authentication credentials
+2. Load configuration from `config.yaml` (or use `--config` to specify location)
+3. Start listening on the configured port (default: 7123)
 
-When no `--config` argument is provided, the server searches for `config.yaml` in the following order:
+## Authentication
 
-1. **Current working directory** (`./config.yaml`)
-2. **Script directory** (same directory as `honeybadger_server.py`)
-3. **System location** (`/etc/honeybadger/config.yaml`)
+The server uses two separate authentication mechanisms:
 
-The first file found is used. This allows flexible deployment:
-- **Per-instance configs**: Different working directories with their own `config.yaml`
-- **System-wide installation**: Config in `/etc/honeybadger/` when script is in `/usr/local/bin/`
-- **Traditional setup**: Config alongside script (backward compatible)
+### API Authentication (Bearer Tokens)
 
-### Deployment Examples
+All report submission endpoints require a valid Bearer token in the `Authorization` header.
 
-**Systemd service** (system-wide config):
-```ini
-[Unit]
-Description=Honeybadger Report Server
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/honeybadger_server.py --config /etc/honeybadger/config.yaml
-Restart=on-failure
-User=honeybadger
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**Docker container** (volume-mounted config):
-```dockerfile
-FROM python:3.11-slim
-
-# Install dependencies
-COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r /app/requirements.txt
-
-# Copy server
-COPY honeybadger_server.py /app/
-
-WORKDIR /app
-EXPOSE 7123
-
-# Config provided via volume mount at /config/config.yaml
-CMD ["python", "honeybadger_server.py", "--config", "/config/config.yaml"]
-```
-
-```bash
-# Run with custom config
-docker run -v /path/to/config.yaml:/config/config.yaml -p 7123:7123 honeybadger
-```
-
-## Configuration
-
-Edit `config.yaml`:
-
+**Token File Format** (`tokens.yaml`):
 ```yaml
-networkport: 7123           # Port the server listens on
-storage_location: ./reports # Directory where reports are stored
-
-# Compliance mode is ENABLED by default
-compliance:
-  enabled: true
-  audit_months: [3, 9]      # March and September audits
-  required_reports:
-    mandatory:
-      - neofetch
-      - lynis
-    one_of:
-      - trivy
-      - vulnix
+tokens:
+  - hb_production_token_abc123
+  - hb_staging_token_xyz789
 ```
 
-## Compliance Mode (ISO Audit Tracking)
+- Multiple tokens supported (for different clients/environments)
+- Whitespace is automatically trimmed
+- Tokens are validated using constant-time comparison (timing-attack resistant)
 
-Honeybadger supports compliance tracking for periodic audits (e.g., ISO requirements for 2x yearly endpoint audits).
+### Dashboard Authentication (HTTP Basic Auth)
 
-### Enabling Compliance Mode
+Web dashboard access requires HTTP Basic Authentication.
 
-Add to `config.yaml`:
-
-```yaml
-compliance:
-  enabled: true
-
-  # Audit months (when compliance audits must be completed)
-  audit_months: [3, 9]  # March and September
-
-  # Required reports for a complete set
-  required_reports:
-    mandatory:
-      - neofetch  # System identification (always required)
-      - lynis     # Security audit (always required)
-    one_of:
-      - trivy     # Container/OS scanner (Ubuntu, Debian, etc.)
-      - vulnix    # NixOS scanner
+**Password File Format** (`password.txt`):
+```
+my_secure_password_123
 ```
 
-### How It Works
-
-**Audit Period Mapping:**
-- Uploads automatically map to the next audit month
-- Example with `audit_months: [3, 9]`:
-  - January/February upload → March 2026 period
-  - April-August upload → September 2026 period
-  - October-February upload → March 2027 period
-
-**Storage Structure:**
-```
-./reports/
-  ├── 2026-03/           ← Audit period (March 2026)
-  │   ├── laptop-SN001-alice/
-  │   │   ├── neofetch-report.json
-  │   │   ├── lynis-report.json
-  │   │   └── trivy-report.json
-  │   └── laptop-SN002-bob/
-  │       └── ...
-  └── 2026-09/           ← Audit period (September 2026)
-      └── ...
-```
-
-**Report Completeness:**
-
-A system is **compliant** when it has:
-- ✓ Neofetch report (provides system ID)
-- ✓ Lynis report (security audit)
-- ✓ **Either** Trivy **OR** Vulnix (at least one scanner)
-
-**Compliance Dashboard:**
-
-Open `http://localhost:7123/` to view:
-- Audit period selector
-- Summary statistics (total, complete, incomplete, compliance %)
-- System table with compliance status
-- Filter by complete/incomplete
-- Download individual reports
-
-### Client Integration (Optional X-OS-Type Header)
-
-Clients can optionally send OS type for better tracking:
-
-```bash
-curl -X POST http://server:7123/ \
-  -H "Content-Type: application/json" \
-  -H "X-Hostname: $(hostname)" \
-  -H "X-Username: $(whoami)" \
-  -H "X-OS-Type: ubuntu" \    # ← Optional
-  -H "X-Report-Type: lynis" \
-  -d @lynis-report.json
-```
-
-Supported values: `ubuntu`, `debian`, `nixos`, `arch`, etc.
-
-### Migration from Legacy Mode
-
-**Existing deployments:**
-1. Existing reports in legacy format (`hostname-username-YYYYMMDD/`) remain accessible
-2. New uploads after enabling compliance mode use new format (`YYYY-MM/sid-username/`)
-3. Legacy reports won't appear in compliance dashboard
-4. To view legacy reports: temporarily set `compliance.enabled: false`
-
-**Known Limitations:**
-- No automatic migration of legacy reports to compliance structure
-- Old and new reports coexist in same `./reports/` directory
-- Compliance dashboard only shows reports uploaded in compliance mode
+- Single password for all dashboard users
+- Only first line is used (extra lines logged as warning)
+- Whitespace is automatically trimmed
+- Username is ignored - any username works with the correct password
 
 ## Submitting Reports
 
-### Option 1: Submit Tar Archive (Multiple Reports at Once)
+### Single Report Submission
 
-Submit all reports for a system in a single tar archive:
-
-```bash
-# Create tar with all reports
-tar -czf reports.tar.gz \
-    lynis-report.json \
-    neofetch-report.json \
-    trivy-report.json \
-    vulnix-report.json
-
-# Submit to server
-curl -X POST http://server:7123/submit-tar \
-  -H "X-Hostname: $(hostname)" \
-  -H "X-Username: $(whoami)" \
-  -H "X-OS-Type: ubuntu" \
-  -H "Content-Type: application/x-tar" \
-  --data-binary @reports.tar.gz
-```
-
-**Tar Submission Features:**
-- Accepts both `.tar` and `.tar.gz` archives
-- Automatically detects report types from filenames
-- Validates all reports before saving
-- Returns detailed per-file status (success/error)
-- Supports partial success (some reports valid, some invalid)
-
-**Filename Patterns (auto-detected):**
-- `lynis-report.json` or `lynis.json` → Lynis report
-- `neofetch-report.json` or `neofetch.json` → Neofetch report
-- `trivy-report.json` or `trivy.json` → Trivy report
-- `vulnix-report.json` or `vulnix.json` → Vulnix report
-
-**Size Limits:**
-- Maximum tar archive: 50MB
-- Maximum individual file: 10MB
-- Maximum files in archive: 100
-
-**Example Response:**
-```json
-{
-  "status": "success",
-  "message": "Processed 4 reports from tar archive",
-  "results": [
-    {
-      "file": "lynis-report.json",
-      "type": "lynis",
-      "status": "saved",
-      "path": "reports/2026-03/laptop-alice/lynis-report.json"
-    },
-    {
-      "file": "neofetch-report.json",
-      "type": "neofetch",
-      "status": "saved",
-      "path": "reports/2026-03/laptop-alice/neofetch-report.json"
-    }
-  ]
-}
-```
-
-### Option 2: Via HTTP Headers (Individual Reports)
+Submit individual reports with Bearer token authentication:
 
 ```bash
-# Lynis report
+# Neofetch (system info)
 curl -X POST http://server:7123/ \
+  -H "Authorization: Bearer hb_production_token_abc123" \
   -H "Content-Type: application/json" \
   -H "X-Hostname: $(hostname)" \
   -H "X-Username: $(whoami)" \
-  -H "X-OS-Type: ubuntu" \
+  -H "X-Report-Type: neofetch" \
+  -d @neofetch-report.json
+
+# Lynis (hardening audit)
+curl -X POST http://server:7123/ \
+  -H "Authorization: Bearer hb_production_token_abc123" \
+  -H "Content-Type: application/json" \
+  -H "X-Hostname: $(hostname)" \
+  -H "X-Username: $(whoami)" \
   -H "X-Report-Type: lynis" \
-  -d @/path/to/lynis-report.json
+  -d @lynis-report.json
 
-# Trivy report
+# Trivy (vulnerability scanner)
 curl -X POST http://server:7123/ \
+  -H "Authorization: Bearer hb_production_token_abc123" \
   -H "Content-Type: application/json" \
   -H "X-Hostname: $(hostname)" \
   -H "X-Username: $(whoami)" \
-  -H "X-OS-Type: ubuntu" \
-  -H "X-Report-Type: trivy" \
-  -d @/path/to/trivy-report.json
-```
-
-### Option 3: Via JSON Body
-
-```bash
-curl -X POST http://server:7123/ \
-  -H "Content-Type: application/json" \
-  -d '{
-    "hostname": "webserver01",
-    "username": "admin",
-    "report_type": "lynis",
-    "scan_data": {...}
-  }'
-```
-
-### Required Fields
-
-- **hostname**: Hostname of the scanned machine (required)
-- **username**: User who performed the scan (required)
-- **report_type**: Report type - "lynis", "trivy", "vulnix", or "neofetch" (required)
-
-### Validation
-
-The server validates:
-- **Report type**: Must be one of: lynis, trivy, vulnix, neofetch
-- **JSON structure**:
-  - Lynis: checks for version fields (warning only)
-  - Trivy: requires `SchemaVersion` and `ArtifactName`
-  - Vulnix: must be valid JSON object or array
-  - Neofetch: must be JSON object with system info fields
-- **JSON format**: Must be valid JSON
-
-Invalid reports are rejected with HTTP 400 and a descriptive error message.
-
-## Integration with Scans
-
-### Lynis
-
-```bash
-#!/bin/bash
-# Run Lynis scan and submit report
-lynis audit system --quick
-
-# Submit report to Honeybadger server
-curl -X POST http://honeybadger-server:7123/ \
-  -H "Content-Type: application/json" \
-  -H "X-Hostname: $(hostname)" \
-  -H "X-Username: $(whoami)" \
-  -H "X-OS-Type: ubuntu" \
-  -H "X-Report-Type: lynis" \
-  -d @/var/log/lynis-report.json
-```
-
-### Trivy
-
-```bash
-#!/bin/bash
-# Scan container image with Trivy
-trivy image --format json --output trivy-report.json ubuntu:22.04
-
-# Submit report to Honeybadger server
-curl -X POST http://honeybadger-server:7123/ \
-  -H "Content-Type: application/json" \
-  -H "X-Hostname: $(hostname)" \
-  -H "X-Username: $(whoami)" \
-  -H "X-OS-Type: ubuntu" \
   -H "X-Report-Type: trivy" \
   -d @trivy-report.json
-```
 
-### Vulnix
-
-```bash
-#!/bin/bash
-# Scan NixOS system with Vulnix
-vulnix --json > vulnix-report.json
-
-# Submit report to Honeybadger server
-curl -X POST http://honeybadger-server:7123/ \
+# Vulnix (NixOS vulnerability scanner)
+curl -X POST http://server:7123/ \
+  -H "Authorization: Bearer hb_production_token_abc123" \
   -H "Content-Type: application/json" \
   -H "X-Hostname: $(hostname)" \
   -H "X-Username: $(whoami)" \
-  -H "X-OS-Type: nixos" \
   -H "X-Report-Type: vulnix" \
   -d @vulnix-report.json
 ```
 
-### Neofetch (System Info)
+### Tar Archive Submission
 
-Since neofetch doesn't support JSON output natively, create a JSON report with system information:
+Submit multiple reports in a single request:
 
 ```bash
-#!/bin/bash
-# Create neofetch-compatible JSON report
+# Create archive with all reports
+tar -czf reports.tar.gz \
+  neofetch-report.json \
+  lynis-report.json \
+  trivy-report.json
 
-cat > neofetch-report.json <<'EOF'
-{
-  "host": "$(hostname -s)",
-  "hostname": "$(hostname)",
-  "os": "$(grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"')",
-  "kernel": "$(uname -r)",
-  "architecture": "$(uname -m)",
-  "uptime": "$(uptime -p)",
-  "timestamp": "$(date -Iseconds)"
-}
-EOF
-
-# Expand variables
-eval "cat <<EOF
-$(cat neofetch-report.json)
-EOF
-" > neofetch-report.json
-
-# Submit report to Honeybadger server
-curl -X POST http://honeybadger-server:7123/ \
-  -H "Content-Type: application/json" \
+# Submit archive
+curl -X POST http://server:7123/submit-tar \
+  -H "Authorization: Bearer hb_production_token_abc123" \
   -H "X-Hostname: $(hostname)" \
   -H "X-Username: $(whoami)" \
-  -H "X-OS-Type: ubuntu" \
-  -H "X-Report-Type: neofetch" \
-  -d @neofetch-report.json
+  --data-binary @reports.tar.gz
 ```
 
-**Important:** The `host` field in the neofetch report is used for the SID column in the dashboard.
+### Authentication Errors
 
-## Status Dashboard
+**Missing token:**
+```json
+{"error": "Missing Authorization header"}
+```
 
-Open `http://localhost:7123/` in your browser. The dashboard automatically switches based on the `compliance.enabled` setting.
+**Invalid token:**
+```json
+{"error": "Invalid authentication token"}
+```
 
-### Compliance Dashboard (compliance.enabled: true)
+**Malformed header:**
+```json
+{"error": "Invalid Authorization header format. Expected: Bearer <token>"}
+```
 
-Shows audit-period-based tracking:
+## Dashboard Access
 
-- **Audit period selector**: Switch between periods (e.g., 2026-03, 2026-09)
-- **Summary statistics**: Total systems, complete, incomplete, compliance percentage
-- **System table columns**:
-  - **SID**: System ID from neofetch report's `host` field
-  - **Username**: User who submitted the report
-  - **OS Type**: Operating system (from X-OS-Type header)
-  - **Upload Date**: When reports were submitted
-  - **Reports**: Badge indicators (N=Neofetch, L=Lynis, T=Trivy, V=Vulnix)
-  - **Status**: ✓ Complete, ⚠ Incomplete, ✗ Missing
-- **Filter dropdown**: Show all, complete only, or incomplete only
-- **Download**: Click report badges to download individual reports
+### Browser Access
 
-**Completeness criteria** (configurable in `config.yaml`):
-- ✓ Complete: Has all mandatory reports + at least one from one_of list
-- ⚠ Incomplete: Missing some required reports
-- ✗ Missing: No neofetch report (cannot identify system)
+1. Open `http://server:7123/` in your browser
+2. Browser will show a login dialog
+3. Enter any username and the password from `password.txt`
+4. Dashboard displays compliance status for all systems
 
-### Legacy Dashboard (compliance.enabled: false)
+**Browser Behavior:**
+- Login prompt appears automatically on first visit
+- Browser caches credentials for the session
+- To log out: close browser or use browser's "forget password" feature
 
-Shows date-based tracking:
-
-- Overview of all received reports grouped by upload date
-- **Columns**: Hostname, SID, Username, Report Date, Last Update, Reports, Status
-- Filter/search functionality for hostname, SID, username, or date
-- Auto-refresh every 30 seconds
-- **Status indicators**:
-  - **Green OK**: Valid combination (Neofetch + Lynis + Trivy OR Neofetch + Lynis + Vulnix)
-  - **Red NOK**: Missing required reports
-- Download individual reports by clicking badges
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` or `/status` | GET | HTML status dashboard |
-| `/` | POST | Receive a single security report (JSON) |
-| `/submit-tar` | POST | Receive multiple reports in tar archive |
-| `/health` | GET | Health check with monitoring data (JSON) |
-| `/reports/<path>` | GET | Download a specific report |
-
-### Health Check Endpoint
-
-The `/health` endpoint returns detailed monitoring information:
+### Command Line Access
 
 ```bash
-curl http://localhost:7123/health
+# View dashboard HTML
+curl -u admin:your_password http://server:7123/
+
+# Download report
+curl -u admin:your_password \
+  http://server:7123/reports/2026-03/hostname-user/lynis-report.json \
+  -o lynis-report.json
 ```
 
-**Response (HTTP 200):**
+## Health Check Endpoint
+
+The `/health` endpoint is **unauthenticated** for monitoring systems:
+
+```bash
+curl http://server:7123/health
+```
+
+Returns:
 ```json
 {
   "status": "ok",
   "http_code": 200,
   "service": "honeybadger-server",
-  "timestamp": "2026-03-16T14:30:00.123456",
-  "uptime": {
-    "seconds": 3600,
-    "human_readable": "1h 0m"
-  },
+  "uptime": {"seconds": 3600, "human_readable": "1h 0m"},
   "statistics": {
     "total_report_directories": 42,
-    "unique_hosts": 15,
-    "reports_by_type": {
-      "lynis": 40,
-      "trivy": 35,
-      "vulnix": 20
-    }
-  },
-  "storage": {
-    "location": "./reports",
-    "accessible": true
+    "unique_hosts": 10,
+    "reports_by_type": {"lynis": 40, "neofetch": 42}
   }
 }
 ```
 
-This endpoint is suitable for monitoring systems like Prometheus, Nagios, or custom health checks.
-
-## Storage Structure
-
-The server supports two storage modes based on the `compliance.enabled` setting.
-
-### Compliance Mode (compliance.enabled: true)
-
-Audit-period-based structure:
+## CLI Arguments
 
 ```
-reports/
-  ├── 2026-03/                    ← Audit period (March 2026)
-  │   ├── laptop-SN001-alice/     ← {sid}-{username}
-  │   │   ├── neofetch-report.json
-  │   │   ├── lynis-report.json
-  │   │   └── trivy-report.json
-  │   └── laptop-SN002-bob/
-  │       ├── neofetch-report.json
-  │       ├── lynis-report.json
-  │       └── vulnix-report.json
-  └── 2026-09/                    ← Audit period (September 2026)
-      └── ...
+usage: honeybadger_server [-h] [--config PATH] --token-file PATH
+                          --dashboard-password-file PATH [--version]
+
+Required Arguments:
+  --token-file PATH              Path to YAML file containing API tokens
+  --dashboard-password-file PATH Path to plaintext file with dashboard password
+
+Optional Arguments:
+  --config PATH                  Path to configuration file
+                                (default: search working dir, script dir, /etc/honeybadger/)
+  --version                     Show version and exit
+  -h, --help                    Show this help message
 ```
 
-- **Directory naming**: `{audit-period}/{sid}-{username}/`
-- **SID extraction**: From neofetch report's `host` field (fallback: hostname)
-- **Report naming**: `{report-type}-report.json`
+## Deployment
 
-### Legacy Mode (compliance.enabled: false)
+### Systemd Service Example
 
-Date-based structure:
+```ini
+[Unit]
+Description=Honeybadger Security Report Server
+After=network.target
 
-```
-reports/
-  ├── webserver01-alice-20260316/  ← {hostname}-{username}-{YYYYMMDD}
-  │   ├── lynis-report.json
-  │   ├── trivy-report.json
-  │   └── neofetch-report.json
-  └── laptop42-bob-20260317/
-      └── ...
-```
+[Service]
+Type=simple
+User=honeybadger
+WorkingDirectory=/opt/honeybadger
+ExecStart=/opt/honeybadger/honeybadger_server.py \
+  --config /etc/honeybadger/config.yaml \
+  --token-file /run/agenix/honeybadger-tokens.yaml \
+  --dashboard-password-file /run/agenix/honeybadger-password.txt
+Restart=on-failure
+RestartSec=5s
 
-- **Directory naming**: `{hostname}-{username}-{YYYYMMDD}/`
-- **Report naming**: `{report-type}-report.json`
-
-### Valid Report Combinations
-
-**Complete set (configurable):**
-- All mandatory reports (default: Neofetch + Lynis)
-- At least one from one_of list (default: Trivy OR Vulnix)
-
-**Example valid combinations:**
-- Neofetch + Lynis + Trivy ✓
-- Neofetch + Lynis + Vulnix ✓
-- Neofetch + Lynis + Trivy + Vulnix ✓
-
-## Testing
-
-```bash
-# Test with sample data
-./test.sh
-
-# View stored reports
-ls -lR reports/
+[Install]
+WantedBy=multi-user.target
 ```
 
+### NixOS with agenix
+
+```nix
+{ config, pkgs, ... }:
+{
+  age.secrets = {
+    honeybadger-tokens = {
+      file = ./secrets/honeybadger-tokens.yaml.age;
+      owner = "honeybadger";
+    };
+    honeybadger-password = {
+      file = ./secrets/honeybadger-password.txt.age;
+      owner = "honeybadger";
+    };
+  };
+
+  systemd.services.honeybadger = {
+    description = "Honeybadger Security Report Server";
+    after = [ "network.target" ];
+    wantedBy = [ "multi-user.target" ];
+
+    serviceConfig = {
+      Type = "simple";
+      User = "honeybadger";
+      WorkingDirectory = "/var/lib/honeybadger";
+      ExecStart = ''
+        ${pkgs.python3}/bin/python3 /opt/honeybadger/honeybadger_server.py \
+          --config /etc/honeybadger/config.yaml \
+          --token-file ${config.age.secrets.honeybadger-tokens.path} \
+          --dashboard-password-file ${config.age.secrets.honeybadger-password.path}
+      '';
+      Restart = "on-failure";
+    };
+  };
+}
+```
+
+## Breaking Changes
+
+### Version 1.1.0: Mandatory Authentication
+
+**What changed:**
+- `--token-file` and `--dashboard-password-file` CLI arguments are now **required**
+- Server will not start without authentication files
+- All POST endpoints require Bearer token authentication
+- All GET endpoints (except `/health`) require Basic Auth
+
+**Migration steps:**
+
+1. **Generate authentication files** (before upgrading):
+   ```bash
+   # Create token file
+   cat > /etc/honeybadger/tokens.yaml <<EOF
+   tokens:
+     - hb_$(openssl rand -hex 16)
+   EOF
+
+   # Create password file
+   openssl rand -base64 24 > /etc/honeybadger/password.txt
+   chmod 600 /etc/honeybadger/tokens.yaml /etc/honeybadger/password.txt
+   chown honeybadger:honeybadger /etc/honeybadger/*.{yaml,txt}
+   ```
+
+2. **Update systemd unit** or deployment scripts to include auth arguments
+
+3. **Update client scripts** to include `Authorization: Bearer <token>` header
+
+4. **Distribute tokens** to all client systems
+
+5. **Share dashboard password** with team via password manager
+
+6. **Upgrade server** - it will now enforce authentication
+
+7. **Test authentication**:
+   ```bash
+   # Test API (should return 401 without token)
+   curl -X POST http://server:7123/
+
+   # Test API with token (should work)
+   curl -X POST http://server:7123/ \
+     -H "Authorization: Bearer your_token" \
+     -H "X-Hostname: test" \
+     -H "X-Username: test" \
+     -H "X-Report-Type: neofetch" \
+     -d '{"os": "NixOS"}'
+
+   # Test dashboard (should prompt for password)
+   curl http://server:7123/
+
+   # Test health check (should work without auth)
+   curl http://server:7123/health
+   ```
+
+**Rollback:**
+If you need to rollback, downgrade to version 1.0.x and remove auth arguments from systemd unit.
+
+## Report Types
+
+| Type | Purpose | Required |
+|------|---------|----------|
+| **Neofetch** | System metadata (hostname, OS, kernel) | Always |
+| **Lynis** | System hardening audit | Always |
+| **Trivy** | Container/OS vulnerability scanner | One of Trivy or Vulnix |
+| **Vulnix** | NixOS vulnerability scanner | One of Trivy or Vulnix |
+
+A system is marked "Complete" when it has:
+- Neofetch (identity)
+- Lynis (hardening audit)
+- Trivy OR Vulnix (vulnerability scan)
+
+## Configuration File
+
+See `config.yaml` for storage location, network port, and compliance settings.
+
+## Security Considerations
+
+- **Token storage**: Tokens are loaded into memory at startup and never written to logs
+- **Password storage**: Password stored in plaintext file (protect with OS file permissions)
+- **Timing attacks**: Token/password comparisons use `secrets.compare_digest()`
+- **Token rotation**: Restart server after updating `tokens.yaml`
+- **No rate limiting**: Deploy behind firewall or reverse proxy with rate limiting
+- **File permissions**: Ensure auth files are readable only by server user (chmod 600)
+
+## Troubleshooting
+
+### Server won't start
+
+**Error: "Token file not found"**
+- Check path in `--token-file` argument
+- Verify file exists and is readable by server user
+
+**Error: "Token file missing 'tokens' key"**
+- Ensure YAML file has `tokens:` key with list of tokens
+- Check YAML syntax with `python3 -c "import yaml; yaml.safe_load(open('tokens.yaml'))"`
+
+**Error: "Dashboard password file is empty"**
+- Ensure password.txt contains at least one non-whitespace character
+
+### Authentication failures
+
+**API returns 401**
+- Verify token in `Authorization: Bearer <token>` header
+- Check token exists in tokens.yaml (case-sensitive, no extra whitespace)
+- Check server logs for "Loaded N token(s)" message at startup
+
+**Dashboard prompts for password repeatedly**
+- Verify password matches first line of password.txt (case-sensitive)
+- Check browser isn't blocking cookies
+- Try different username (username is ignored, but required by Basic Auth)
+
+**Health check returns 401**
+- Health check should work without auth - this indicates a bug
+- Check you're requesting `/health` not `/` or `/status`
+
+## License
+
+See LICENSE file.

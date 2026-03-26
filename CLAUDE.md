@@ -149,6 +149,133 @@ The server supports flexible configuration file location via CLI arguments:
 
 **Overwrite behavior:** Same-day reports overwrite. Different dates create new directories.
 
+## Authentication
+
+**Added in version 1.1.0** - Mandatory authentication for all endpoints except `/health`.
+
+### Architecture
+
+```
+Client (API)                  Server                    Dashboard User
+┌──────────────┐             ┌─────────────┐           ┌──────────────┐
+│              │             │             │           │              │
+│ POST /       ├────Bearer──>│ _validate_  │           │ GET /        │
+│              │   Token     │ bearer_     │           │              │
+│              │             │ token()     │           │              │
+└──────────────┘             └─────────────┘           └──────────────┘
+                                    │                          │
+                                    ▼                          │
+                            VALID_TOKENS list                  │
+                            (in memory)                        │
+                                                               │
+                                                       ┌───────┴──────┐
+                                                       │ _validate_   │
+                                                       │ basic_auth() │
+                                                       └───────┬──────┘
+                                                               │
+                                                               ▼
+                                                       DASHBOARD_PASSWORD
+                                                       (in memory)
+```
+
+### Design Decisions
+
+**Why two authentication methods?**
+- **API clients** (scripts) → Bearer tokens (easy to inject in headers, token per environment)
+- **Dashboard users** (humans) → Basic Auth (browser handles UI, single password)
+
+**Why in-memory credential storage?**
+- Load once at startup, fail fast if missing/invalid
+- No file I/O on hot path (performance)
+- Token rotation requires restart (acceptable for internal infrastructure)
+
+**Why no password hashing?**
+- Password file protected by OS permissions (chmod 600)
+- Server runs as dedicated user
+- If attacker has memory access, they already have file access
+- Keeps codebase dependency-free
+
+**Why constant-time comparison?**
+- `secrets.compare_digest()` prevents timing attacks
+- Negligible performance cost
+- Security best practice even on internal network
+
+### Implementation Details
+
+**Global Variables (loaded at startup):**
+```python
+VALID_TOKENS = []           # List of valid Bearer tokens
+DASHBOARD_PASSWORD = ""      # Single password for dashboard
+```
+
+**Request Flow:**
+
+1. **POST requests** (report submission):
+   ```
+   do_POST() → _validate_bearer_token() → process request
+                      ↓ (if invalid)
+                  send 401 JSON error
+   ```
+
+2. **GET requests** (dashboard):
+   ```
+   do_GET() → /health? → yes → return health status (no auth)
+                  ↓ no
+           _validate_basic_auth() → process request
+                  ↓ (if invalid)
+              send 401 HTML error with WWW-Authenticate header
+   ```
+
+**Error Responses:**
+- API endpoints: JSON format `{"error": "message"}`
+- Dashboard endpoints: HTML with WWW-Authenticate header (triggers browser login)
+
+**File Formats:**
+- `tokens.yaml`: YAML with `tokens:` list
+- `password.txt`: Plaintext, first line only, whitespace trimmed
+
+**Security Features:**
+- Constant-time token/password comparison
+- No credentials in logs
+- No fallback/default passwords
+- Fail-fast startup validation
+
+### Common Scenarios
+
+**Adding authentication to a new endpoint:**
+
+1. Determine endpoint type:
+   - Report submission → Bearer token
+   - Dashboard/download → Basic Auth
+   - Monitoring → No auth (like `/health`)
+
+2. Add validation at start of handler:
+   ```python
+   # For API endpoints
+   if not self._validate_bearer_token():
+       self._send_json_error(401, "Invalid authentication token")
+       return
+
+   # For dashboard endpoints
+   if not self._validate_basic_auth():
+       self._send_html_error(401, "Unauthorized", include_auth_header=True)
+       return
+   ```
+
+**Rotating tokens:**
+1. Edit `tokens.yaml` - add new token
+2. Update client scripts with new token
+3. Test client can submit reports
+4. Remove old token from `tokens.yaml`
+5. Restart server
+6. Verify old token returns 401
+
+**Changing dashboard password:**
+1. Edit `password.txt`
+2. Restart server
+3. Distribute new password to team
+4. Users may need to clear browser auth cache
+
 ## Common Tasks
 
 ### Adding a new report type
