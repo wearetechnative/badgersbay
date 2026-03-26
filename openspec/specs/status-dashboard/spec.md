@@ -34,12 +34,51 @@ The dashboard SHALL display summary statistics for all reports.
 
 ### Report Table
 
-Columns:
+### Requirement: Display system compliance table
+
+The system SHALL display a table showing compliance status for each system in the audit period using hostname instead of SID.
+
+**Columns:**
+- Hostname (from X-Hostname header)
+- Username
+- OS Type
+- Upload Date (latest upload in period)
+- Reports (badges: N L T V)
+- Status (Complete/Incomplete with details)
+
+#### Scenario: Complete system row
+- **WHEN** webserver01 has complete set in 2026-03
+- **THEN** row shows: "webserver01 | admin | ubuntu | 2026-03-15 | N L T | ✓ Complete"
+
+#### Scenario: Incomplete system row
+- **WHEN** dbserver02 missing trivy/vulnix in 2026-03
+- **THEN** row shows: "dbserver02 | dbadmin | nixos | 2026-03-10 | N L | ⚠ Missing: T or V"
+
+#### Scenario: No SID column
+- **WHEN** viewing compliance dashboard table
+- **THEN** table does NOT include SID column (uses Hostname as first column)
+
+### Requirement: Legacy dashboard display
+
+The system SHALL display hostname and username in legacy mode without SID field.
+
+#### Scenario: Legacy mode table structure
+- **WHEN** compliance.enabled is false
+- **THEN** table shows columns: Hostname, Username, Report Date, Reports, Last Update
+
+#### Scenario: Legacy mode row display
+- **WHEN** viewing legacy dashboard
+- **THEN** row shows: "webserver01 | admin | 2026-03-16 | N L T | 2026-03-16 14:23"
+
+#### Scenario: No SID in legacy mode
+- **WHEN** viewing legacy dashboard
+- **THEN** table does NOT include SID field or column
+
+### Legacy Mode Columns
 
 | Column | Source | Description |
 |--------|--------|-------------|
 | **Hostname** | Directory name parse | System hostname |
-| **SID** | `neofetch-report.json → host` field | System identifier (short hostname) |
 | **Username** | Directory name parse | User who submitted reports |
 | **Report Date** | Directory name (YYYYMMDD) | Date reports were submitted |
 | **Last Update** | Latest file mtime in directory | Most recent report update timestamp |
@@ -103,7 +142,7 @@ Downloads are named: `<hostname>-<username>-<yyyymmdd>-<type>-report.json`
 
 Real-time client-side filtering via search input:
 
-- Searches across: hostname, SID, username, date
+- Searches across: hostname, username, date
 - Case-insensitive
 - Instant update (no page reload)
 - Shows "No results" message when no matches
@@ -118,22 +157,13 @@ Page automatically reloads every 30 seconds to show latest data.
 
 Dashboard scans `storage_location` directory:
 
-1. Iterate all subdirectories
-2. Parse directory name: `<hostname>-<username>-<yyyymmdd>`
+1. Iterate all subdirectories (handles both compliance and legacy mode structures)
+2. Parse directory name:
+   - Legacy: `<hostname>-<username>-<yyyymmdd>`
+   - Compliance: `<YYYY-MM>/<hostname>-<username>`
 3. Check for existence of each report type
-4. Extract SID from neofetch report's `host` field
-5. Find latest mtime across all JSON files
-6. Sort by last update (newest first)
-
-### SID Extraction
-
-**Source:** `neofetch-report.json`
-
-**Fields checked (in order):**
-1. `host` (preferred - short hostname)
-2. `hostname` (fallback - FQDN)
-
-**Display:** `-` if neofetch missing or field not found
+4. Find latest mtime across all JSON files
+5. Sort by last update (newest first)
 
 ### Styling
 

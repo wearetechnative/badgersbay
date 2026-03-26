@@ -6,14 +6,47 @@ Reports are stored on the filesystem in a date-organized directory structure. Ea
 
 ## Storage Structure
 
+### Requirement: Directory structure based on audit periods
+
+The system SHALL store reports in directories organized by audit period instead of individual upload dates when compliance mode is enabled.
+
+**Directory Format (compliance enabled):** `{YYYY-MM}/{hostname}-{username}/`
+
+Where:
+- `YYYY-MM`: Audit period (year and audit month)
+- `hostname`: From X-Hostname header
+- `username`: From X-Username header
+
+**Directory Format (legacy mode):** `{hostname}-{username}-{YYYYMMDD}/`
+
+#### Scenario: Compliance mode storage structure
+- **WHEN** compliance.enabled is true
+- **THEN** reports stored in `./reports/2026-03/webserver01-admin/`
+
+#### Scenario: Legacy mode storage structure
+- **WHEN** compliance.enabled is false or not configured
+- **THEN** reports stored in `./reports/webserver01-admin-20260316/`
+
+#### Scenario: System directory within audit period
+- **WHEN** webserver01 (user admin) uploads to audit period 2026-03
+- **THEN** reports stored in `./reports/2026-03/webserver01-admin/lynis-report.json`
+
+#### Scenario: Upload date mapping
+- **WHEN** upload received on 2026-04-15 with audit_months [3, 9]
+- **THEN** stored in `./reports/2026-09/` (next audit period)
+
+#### Scenario: User changes for same hostname
+- **WHEN** webserver01 uploads with user "admin" then later with user "sysadmin"
+- **THEN** creates separate directories: `webserver01-admin/` and `webserver01-sysadmin/`
+
+### Example (Legacy Mode)
+
 ```
 <storage_location>/
   └── <hostname>-<username>-<yyyymmdd>/
       ├── lynis-report.json
       └── neofetch-report.json
 ```
-
-### Example
 
 ```
 ./reports/
@@ -25,13 +58,36 @@ Reports are stored on the filesystem in a date-organized directory structure. Ea
       └── neofetch-report.json
 ```
 
+### Example (Compliance Mode)
+
+```
+./reports/
+  ├── 2026-03/
+  │   ├── webserver01-admin/
+  │   │   ├── lynis-report.json
+  │   │   └── neofetch-report.json
+  │   └── nixos-prod-sysadmin/
+  │       ├── lynis-report.json
+  │       └── neofetch-report.json
+  └── 2026-09/
+      └── webserver01-admin/
+          ├── lynis-report.json
+          └── neofetch-report.json
+```
+
 ## Directory Naming
 
-**Format:** `<hostname>-<username>-<yyyymmdd>`
+**Legacy Format:** `<hostname>-<username>-<yyyymmdd>`
 
 - `hostname`: From `X-Hostname` header or JSON field
 - `username`: From `X-Username` header or JSON field
 - `yyyymmdd`: Current date when report is received (YYYYMMDD format)
+
+**Compliance Format:** `<YYYY-MM>/<hostname>-<username>`
+
+- `YYYY-MM`: Calculated audit period
+- `hostname`: From `X-Hostname` header or JSON field
+- `username`: From `X-Username` header or JSON field
 
 ## Requirement: File Naming
 
@@ -51,6 +107,24 @@ Each report type SHALL map to a specific filename in the host directory.
 - **THEN** server stores it as `neofetch-report.json` in the appropriate host directory
 
 ## Overwrite Behavior
+
+### Requirement: Overwrite behavior in audit periods
+
+The system SHALL overwrite reports when same hostname-username combination uploads multiple times to the same audit period.
+
+#### Scenario: Multiple uploads same audit period
+- **WHEN** webserver01-admin uploads on 2026-02-10 and 2026-03-15 (both map to 2026-03)
+- **THEN** second upload overwrites first in `./reports/2026-03/webserver01-admin/`
+
+#### Scenario: Different audit periods preserved
+- **WHEN** webserver01-admin uploads to 2026-03 period and later to 2026-09 period
+- **THEN** both audit period directories contain separate reports for same hostname-username
+
+#### Scenario: Same hostname different users
+- **WHEN** webserver01 uploads as "admin" and "sysadmin" in same period
+- **THEN** separate directories: `webserver01-admin/` and `webserver01-sysadmin/`
+
+### Legacy Mode Behavior
 
 **Same date:** Reports received on the same day overwrite previous reports for that host-user combination.
 
