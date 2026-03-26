@@ -134,7 +134,68 @@ Supported values: `ubuntu`, `debian`, `nixos`, `arch`, etc.
 
 ## Submitting Reports
 
-### Option 1: Via HTTP Headers (Recommended)
+### Option 1: Submit Tar Archive (Multiple Reports at Once)
+
+Submit all reports for a system in a single tar archive:
+
+```bash
+# Create tar with all reports
+tar -czf reports.tar.gz \
+    lynis-report.json \
+    neofetch-report.json \
+    trivy-report.json \
+    vulnix-report.json
+
+# Submit to server
+curl -X POST http://server:7123/submit-tar \
+  -H "X-Hostname: $(hostname)" \
+  -H "X-Username: $(whoami)" \
+  -H "X-OS-Type: ubuntu" \
+  -H "Content-Type: application/x-tar" \
+  --data-binary @reports.tar.gz
+```
+
+**Tar Submission Features:**
+- Accepts both `.tar` and `.tar.gz` archives
+- Automatically detects report types from filenames
+- Validates all reports before saving
+- Returns detailed per-file status (success/error)
+- Supports partial success (some reports valid, some invalid)
+
+**Filename Patterns (auto-detected):**
+- `lynis-report.json` or `lynis.json` → Lynis report
+- `neofetch-report.json` or `neofetch.json` → Neofetch report
+- `trivy-report.json` or `trivy.json` → Trivy report
+- `vulnix-report.json` or `vulnix.json` → Vulnix report
+
+**Size Limits:**
+- Maximum tar archive: 50MB
+- Maximum individual file: 10MB
+- Maximum files in archive: 100
+
+**Example Response:**
+```json
+{
+  "status": "success",
+  "message": "Processed 4 reports from tar archive",
+  "results": [
+    {
+      "file": "lynis-report.json",
+      "type": "lynis",
+      "status": "saved",
+      "path": "reports/2026-03/laptop-alice/lynis-report.json"
+    },
+    {
+      "file": "neofetch-report.json",
+      "type": "neofetch",
+      "status": "saved",
+      "path": "reports/2026-03/laptop-alice/neofetch-report.json"
+    }
+  ]
+}
+```
+
+### Option 2: Via HTTP Headers (Individual Reports)
 
 ```bash
 # Lynis report
@@ -156,7 +217,7 @@ curl -X POST http://server:7123/ \
   -d @/path/to/trivy-report.json
 ```
 
-### Option 2: Via JSON Body
+### Option 3: Via JSON Body
 
 ```bash
 curl -X POST http://server:7123/ \
@@ -322,7 +383,8 @@ Shows date-based tracking:
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/` or `/status` | GET | HTML status dashboard |
-| `/` | POST | Receive a security report |
+| `/` | POST | Receive a single security report (JSON) |
+| `/submit-tar` | POST | Receive multiple reports in tar archive |
 | `/health` | GET | Health check with monitoring data (JSON) |
 | `/reports/<path>` | GET | Download a specific report |
 
