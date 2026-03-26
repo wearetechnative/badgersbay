@@ -7,6 +7,8 @@ import json
 import os
 import yaml
 import time
+import tarfile
+import io
 from datetime import datetime
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -330,7 +332,7 @@ class ReportHandler(BaseHTTPRequestHandler):
 
     def validate_report_type(self, report_type):
         """Validate that the report type is supported"""
-        valid_types = ['lynis', 'neofetch']
+        valid_types = ['lynis', 'neofetch', 'trivy', 'vulnix']
         if report_type.lower() not in valid_types:
             return False, f"Invalid report type '{report_type}'. Supported types: {', '.join(valid_types)}"
         return True, None
@@ -357,7 +359,190 @@ class ReportHandler(BaseHTTPRequestHandler):
             if not any(key in data for key in ['hostname', 'os', 'kernel', 'system']):
                 logger.warning("Neofetch report may be invalid: missing common system info fields")
 
+        # Trivy validation
+        elif report_type_lower == 'trivy':
+            if not isinstance(data, dict):
+                return False, "Invalid Trivy report: must be a JSON object"
+            # Check for common Trivy report fields
+            if 'Results' not in data and 'ArtifactName' not in data:
+                logger.warning("Trivy report may be invalid: missing 'Results' or 'ArtifactName' field")
+
+        # Vulnix validation
+        elif report_type_lower == 'vulnix':
+            if not isinstance(data, dict):
+                return False, "Invalid Vulnix report: must be a JSON object"
+            # Check for vulnerabilities field
+            if 'vulnerabilities' not in data:
+                logger.warning("Vulnix report may be invalid: missing 'vulnerabilities' field")
+
         return True, None
+
+    def detect_report_type_from_filename(self, filename):
+        """Detect report type from filename patterns
+
+        Args:
+            filename: Name of the file (can include directory path)
+
+        Returns:
+            str or None: Report type if detected, None otherwise
+        """
+        # Extract just the filename without path
+        basename = os.path.basename(filename).lower()
+
+        # Match patterns for each report type
+        if 'lynis' in basename and basename.endswith('.json'):
+            return 'lynis'
+        elif 'neofetch' in basename and basename.endswith('.json'):
+            return 'neofetch'
+        elif 'trivy' in basename and basename.endswith('.json'):
+            return 'trivy'
+        elif 'vulnix' in basename and basename.endswith('.json'):
+            return 'vulnix'
+
+        return None
+
+    def validate_tar_member_path(self, member):
+        """Validate tar member path for security
+
+        Args:
+            member: TarInfo object from tarfile
+
+        Returns:
+            tuple: (is_valid, error_message)
+        """
+        # Reject absolute paths
+        if member.name.startswith('/'):
+            return False, f"Tar archive contains dangerous path: {member.name}"
+
+        # Reject parent directory traversal
+        if '..' in member.name:
+            return False, f"Tar archive contains dangerous path: {member.name}"
+
+        # Reject symlinks
+        if member.issym() or member.islnk():
+            return False, f"Tar archive contains symlink: {member.name}"
+
+        # Check nesting depth (max 3 levels)
+        depth = member.name.count('/')
+        if depth > 3:
+            return False, f"Tar archive contains deeply nested path: {member.name}"
+
+        return True, None
+
+    def validate_tar_size_limits(self, content_length, member_sizes):
+        """Validate tar archive and individual file sizes
+
+        Args:
+            content_length: Total size of tar archive in bytes
+            member_sizes: Dict mapping member names to their sizes in bytes
+
+        Returns:
+            tuple: (is_valid, error_message)
+        """
+        MAX_TAR_SIZE = 50 * 1024 * 1024  # 50MB
+        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+        # Check total tar size
+        if content_length > MAX_TAR_SIZE:
+            return False, f"Tar archive too large (max 50MB)"
+
+        # Check individual file sizes
+        for member_name, size in member_sizes.items():
+            if size > MAX_FILE_SIZE:
+                return False, f"File too large: {member_name} (max 10MB per file)"
+
+        return True, None
+
+    def extract_and_validate_tar(self, tar_data, content_length):
+        """Extract and validate tar archive contents
+
+        Args:
+            tar_data: Bytes of tar archive
+            content_length: Size of tar archive in bytes
+
+        Returns:
+            tuple: (success, result)
+                On success: (True, [(filename, report_type, json_content), ...])
+                On failure: (False, error_message)
+        """
+        try:
+            # Open tar archive with auto-detection of compression
+            tar = tarfile.open(fileobj=io.BytesIO(tar_data), mode='r:*')
+        except tarfile.TarError as e:
+            return False, f"Invalid tar archive: {str(e)}"
+        except Exception as e:
+            return False, f"Invalid tar archive: corrupted data"
+
+        try:
+            members = tar.getmembers()
+
+            # Check if tar is empty
+            if not members:
+                return False, "Tar archive contains no report files"
+
+            # Check file count limit
+            if len(members) > 100:
+                return False, f"Tar archive contains too many files (max 100, found {len(members)})"
+
+            # Pre-scan: validate all member paths and collect sizes
+            member_sizes = {}
+            json_files = []
+
+            for member in members:
+                # Only process files (skip directories)
+                if not member.isfile():
+                    continue
+
+                # Only process JSON files
+                if not member.name.endswith('.json'):
+                    continue
+
+                # Validate path security
+                valid, error_msg = self.validate_tar_member_path(member)
+                if not valid:
+                    return False, error_msg
+
+                # Collect size for validation
+                member_sizes[member.name] = member.size
+                json_files.append(member)
+
+            # Check if we have any JSON files
+            if not json_files:
+                return False, "Tar archive contains no report files"
+
+            # Validate size limits
+            valid, error_msg = self.validate_tar_size_limits(content_length, member_sizes)
+            if not valid:
+                return False, error_msg
+
+            # Extract and process JSON files
+            results = []
+            for member in json_files:
+                # Detect report type from filename
+                report_type = self.detect_report_type_from_filename(member.name)
+                if not report_type:
+                    return False, f"Cannot determine report type for file: {member.name}"
+
+                # Extract file content
+                try:
+                    file_obj = tar.extractfile(member)
+                    content = file_obj.read()
+
+                    # Parse JSON
+                    json_content = json.loads(content)
+
+                    results.append((member.name, report_type, json_content))
+                except json.JSONDecodeError as e:
+                    return False, f"Invalid JSON in file {member.name}: {str(e)}"
+                except Exception as e:
+                    return False, f"Error extracting file {member.name}: {str(e)}"
+
+            tar.close()
+            return True, results
+
+        except Exception as e:
+            tar.close()
+            return False, f"Error processing tar archive: {str(e)}"
 
     def get_health_status(self):
         """Get health status information for monitoring"""
@@ -413,6 +598,11 @@ class ReportHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """Handle POST requests with JSON report data"""
+        # Route to tar handler if path is /submit-tar
+        if self.path == '/submit-tar':
+            self.do_POST_submit_tar()
+            return
+
         try:
             # Get content length
             content_length = int(self.headers.get('Content-Length', 0))
@@ -490,6 +680,125 @@ class ReportHandler(BaseHTTPRequestHandler):
             logger.error(f"Error processing request: {e}", exc_info=True)
             self.send_error(500, f"Internal server error: {str(e)}")
 
+    def do_POST_submit_tar(self):
+        """Handle POST requests with tar archive containing multiple reports"""
+        try:
+            # Get required headers
+            hostname = self.headers.get('X-Hostname')
+            username = self.headers.get('X-Username')
+
+            if not hostname or not username:
+                self.send_error(400, "Missing required headers: X-Hostname and X-Username")
+                return
+
+            # Get content length and validate
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length == 0:
+                self.send_error(400, "No content provided")
+                return
+
+            # Check size limit (50MB)
+            MAX_TAR_SIZE = 50 * 1024 * 1024
+            if content_length > MAX_TAR_SIZE:
+                self.send_error(413, "Tar archive too large (max 50MB)")
+                return
+
+            # Read request body
+            body = self.rfile.read(content_length)
+
+            # Extract and validate tar archive
+            success, result = self.extract_and_validate_tar(body, content_length)
+            if not success:
+                logger.error(f"Tar validation failed: {result}")
+                self.send_error(400, result)
+                return
+
+            # Result is list of (filename, report_type, json_content)
+            reports = result
+
+            # Process each report
+            results = []
+            success_count = 0
+            error_count = 0
+            os_type = self.headers.get('X-OS-Type', 'unknown')
+
+            for filename, report_type, json_content in reports:
+                try:
+                    # Validate report structure
+                    valid, error_msg = self.validate_report_structure(report_type, json_content)
+                    if not valid:
+                        results.append({
+                            'file': filename,
+                            'type': report_type,
+                            'status': 'error',
+                            'error': error_msg
+                        })
+                        error_count += 1
+                        continue
+
+                    # Save the report
+                    saved_path, audit_period = self.save_report(hostname, username, report_type, json_content, os_type)
+
+                    # Update compliance cache if enabled
+                    if self.config.compliance_enabled and self.compliance_cache:
+                        self.compliance_cache.update_system(
+                            audit_period, hostname, username, report_type.lower(), os_type
+                        )
+
+                    results.append({
+                        'file': filename,
+                        'type': report_type,
+                        'status': 'saved',
+                        'path': str(saved_path)
+                    })
+                    success_count += 1
+
+                except Exception as e:
+                    logger.error(f"Error processing {filename}: {e}")
+                    results.append({
+                        'file': filename,
+                        'type': report_type,
+                        'status': 'error',
+                        'error': str(e)
+                    })
+                    error_count += 1
+
+            # Determine HTTP status code
+            if success_count > 0 and error_count == 0:
+                # All succeeded
+                status_code = 200
+                status = 'success'
+                message = f"Processed {success_count} reports from tar archive"
+            elif success_count > 0 and error_count > 0:
+                # Partial success
+                status_code = 207  # Multi-Status
+                status = 'partial'
+                message = f"Processed {success_count}/{len(reports)} reports, {error_count} failed"
+            else:
+                # All failed
+                status_code = 400
+                status = 'error'
+                message = f"All {error_count} reports failed validation"
+
+            # Send response
+            self.send_response(status_code)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+
+            response = {
+                'status': status,
+                'message': message,
+                'results': results
+            }
+
+            self.wfile.write(json.dumps(response, indent=2).encode())
+
+            logger.info(f"Tar submission processed: {success_count} success, {error_count} errors")
+
+        except Exception as e:
+            logger.error(f"Error processing tar submission: {e}", exc_info=True)
+            self.send_error(500, f"Internal server error: {str(e)}")
+
     def save_report(self, hostname, username, report_type, data, os_type='unknown'):
         """Save report to disk with appropriate filename
 
@@ -510,6 +819,10 @@ class ReportHandler(BaseHTTPRequestHandler):
             filename = 'lynis-report.json'
         elif report_type_lower == 'neofetch':
             filename = 'neofetch-report.json'
+        elif report_type_lower == 'trivy':
+            filename = 'trivy-report.json'
+        elif report_type_lower == 'vulnix':
+            filename = 'vulnix-report.json'
         else:
             filename = f'{report_type}-report.json'
             logger.warning(f"Unexpected report type '{report_type}', saving as '{filename}'")
