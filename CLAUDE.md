@@ -54,6 +54,8 @@ Sysadmin Browser              │   ┌──────────┐   │
 | Type | Purpose | Target Systems |
 |------|---------|----------------|
 | **Lynis** | System hardening audit | All Linux/Unix |
+| **Trivy** | Container and OS vulnerability scanner | All (containers/traditional) |
+| **Vulnix** | NixOS-specific vulnerability scanner | NixOS systems |
 | **Neofetch** | System metadata/identity | All (required!) |
 
 ### The "OK" Logic
@@ -61,8 +63,9 @@ Sysadmin Browser              │   ┌──────────┐   │
 A system is marked **OK** (green) if it has:
 - **Neofetch** (always required - provides system identity)
 - **AND** Lynis (system audit - always needed)
+- **AND** Trivy or Vulnix (vulnerability scanner - at least one)
 
-**Rationale:** For ISO compliance, systems need baseline hardening audit (Lynis) and identity (Neofetch).
+**Rationale:** For ISO compliance, systems need baseline hardening audit (Lynis), identity (Neofetch), and vulnerability scanning (Trivy or Vulnix depending on OS).
 
 ## File Locations
 
@@ -74,8 +77,10 @@ honeybadger-server/
 ├── README.md               # User documentation
 ├── CLAUDE.md               # This file
 ├── BUGFIXES.md             # Documented bug fixes
-├── test.sh                 # Quick test script
+├── test.sh                 # Quick test script (single reports)
+├── test-tar-submit.sh      # Test script for tar submission
 ├── test-*.json             # Sample reports
+├── example-client-submit-tar.sh  # Example client for tar submission
 └── openspec/               # Change management
     ├── config.yaml         # Project context
     ├── specs/              # Capability specifications
@@ -141,19 +146,53 @@ The single Python file is organized as:
 2. CSS is inline at line 342
 3. JavaScript is inline at line 545
 
+## Endpoints
+
+The server provides two methods for report submission:
+
+### 1. Single Report Submission (POST /)
+Traditional endpoint for submitting one report at a time:
+- Client sends X-Hostname, X-Username, X-Report-Type headers
+- Body contains JSON report data
+- One HTTP request per report type
+
+### 2. Tar Archive Submission (POST /submit-tar)
+New endpoint for submitting multiple reports at once:
+- Client sends X-Hostname, X-Username headers
+- Body contains tar/tar.gz archive with multiple JSON files
+- Filename-based report type detection (lynis.json, neofetch-report.json, etc.)
+- Returns detailed per-file status (HTTP 200/207/400)
+- Security: validates paths, enforces size limits (50MB tar, 10MB per file, max 100 files)
+
+**Advantages of tar submission:**
+- Reduces network round-trips (4 reports = 1 request vs 4 requests)
+- Simplifies client scripts (bundle once, upload once)
+- Atomic: all reports for same audit period
+- Better for unreliable networks
+
 ## Testing
 
 ```bash
-# Quick test with sample data
+# Quick test with sample data (single reports)
 ./test.sh
 
-# Manual test
+# Test tar submission feature
+./test-tar-submit.sh
+
+# Manual test - single report
 curl -X POST http://localhost:7123/ \
   -H "Content-Type: application/json" \
   -H "X-Hostname: testhost" \
   -H "X-Username: testuser" \
   -H "X-Report-Type: lynis" \
   -d @test-lynis-report.json
+
+# Manual test - tar submission
+tar -czf reports.tar.gz test-lynis-report.json test-neofetch-report.json
+curl -X POST http://localhost:7123/submit-tar \
+  -H "X-Hostname: testhost" \
+  -H "X-Username: testuser" \
+  --data-binary @reports.tar.gz
 
 # Check dashboard
 open http://localhost:7123/
