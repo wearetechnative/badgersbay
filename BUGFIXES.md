@@ -259,3 +259,144 @@ curl -s http://localhost:7123/ | grep -i "SID"
 ### Rollback
 
 If issues occur, revert to previous code version. Directories created with new structure will remain (manual cleanup if needed).
+
+---
+
+## 2026-03-30: OS Type Not Updating on Dashboard Refresh
+
+**Severity:** Medium
+**Component:** Report Ingestion, Compliance Dashboard
+**Affected versions:** Compliance mode enabled systems
+
+### Problem
+
+The OS Type column in the compliance dashboard was not updating when new reports arrived. The OS type would only refresh after restarting the server, causing confusion for users monitoring system status.
+
+**Root cause:**
+1. OS type was only extracted from X-OS-Type header during upload
+2. Many clients didn't set this header, defaulting to "unknown"
+3. The neofetch JSON payload contains the authoritative OS information in the `os` field
+4. Cache rebuild at server start read from neofetch files directly, showing correct OS
+5. New uploads only used header, overwriting correct cached OS type with "unknown"
+
+**User impact:**
+- Dashboard showed "unknown" for OS Type even though neofetch data contained correct information
+- Required server restart to see correct OS type
+- Inconsistent display between server restarts
+
+### Solution
+
+**Extract OS type directly from neofetch JSON payload when available:**
+
+1. Check if report_type is "neofetch"
+2. Extract `os` field from JSON data
+3. Use extracted value as os_type (takes precedence over X-OS-Type header)
+4. Pass to cache update so dashboard reflects immediately
+
+**Priority order:**
+- Neofetch JSON `os` field (most authoritative)
+- X-OS-Type header (fallback)
+- "unknown" (default)
+
+### Implementation
+
+**File:** `honeybadger_server.py`
+**Function:** `do_POST()` (around line 876-882)
+
+```python
+# Extract OS type (will be used in compliance mode)
+os_type = self.headers.get('X-OS-Type', 'unknown')
+
+# If this is a neofetch report, extract OS type from the data itself
+if report_type.lower() == 'neofetch' and isinstance(data, dict) and 'os' in data:
+    os_type = data.get('os', os_type)
+    logger.info(f"Extracted OS type from neofetch data: {os_type}")
+
+# Save the report
+saved_path, audit_period = self.save_report(hostname, username, report_type, data, os_type)
+```
+
+### Verification
+
+**Test case:**
+```bash
+# Upload neofetch without X-OS-Type header
+curl -X POST http://localhost:7123/ \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Hostname: testhost" \
+  -H "X-Username: testuser" \
+  -H "X-Report-Type: neofetch" \
+  -d '{"os": "NixOS 24.05", "hostname": "testhost", "kernel": "6.1.0"}'
+```
+
+**Expected result:**
+1. Server logs: `Extracted OS type from neofetch data: NixOS 24.05`
+2. Dashboard refresh shows "NixOS 24.05" in OS Type column immediately
+3. No server restart required
+
+### Impact
+
+- **Affected systems:** All systems using compliance mode
+- **Backwards compatibility:** Fully backward compatible (X-OS-Type header still supported)
+- **Client changes needed:** None (improvement for all clients)
+- **API changes:** None (response format unchanged)
+- **Dashboard:** OS Type column now updates immediately on refresh
+
+---
+
+## 2026-03-30: Tar Archive Filename Prefix
+
+**Severity:** Low (usability improvement)
+**Component:** Report Storage
+**Affected versions:** All versions with tar submission support
+
+### Problem
+
+When users uploaded tar archives via `/submit-tar`, the server renamed files with a generic "submission-" prefix:
+- Upload: `honeybadger-lobos-wtoorren-30-03-2026.tar.gz`
+- Stored as: `submission-20260330-142931.tar.gz`
+- Downloaded as: `lobos-wtoorren-submission-20260330-142931.tar.gz`
+
+This made downloaded files harder to identify as Honeybadger reports.
+
+### Solution
+
+Changed tar filename prefix from "submission-" to "honeybadger-" to match user expectations and maintain recognizable naming convention.
+
+### Implementation
+
+**File:** `honeybadger_server.py`
+**Function:** `do_POST_submit_tar()` (around line 970)
+
+**Change:**
+```python
+# BEFORE
+tar_filename = f"submission-{timestamp}.tar.gz"
+
+# AFTER
+tar_filename = f"honeybadger-{timestamp}.tar.gz"
+```
+
+### Verification
+
+**Test case:**
+```bash
+# Upload tar archive
+curl -X POST http://localhost:7123/submit-tar \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Hostname: testhost" \
+  -H "X-Username: testuser" \
+  --data-binary @reports.tar.gz
+```
+
+**Expected result:**
+- Server logs: `Tar file saved: reports/2026-03/testhost-testuser/honeybadger-20260330-142931.tar.gz`
+- Download filename: `testhost-testuser-honeybadger-20260330-142931.tar.gz`
+
+### Impact
+
+- **Backwards compatibility:** Existing "submission-*" files remain accessible and downloadable
+- **Client changes needed:** None
+- **API changes:** None (server-internal naming only)
+- **Dashboard:** TAR badge continues to work with both naming conventions

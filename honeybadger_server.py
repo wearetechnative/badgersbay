@@ -876,6 +876,11 @@ class ReportHandler(BaseHTTPRequestHandler):
             # Extract OS type (will be used in compliance mode)
             os_type = self.headers.get('X-OS-Type', 'unknown')
 
+            # If this is a neofetch report, extract OS type from the data itself
+            if report_type.lower() == 'neofetch' and isinstance(data, dict) and 'os' in data:
+                os_type = data.get('os', os_type)
+                logger.info(f"Extracted OS type from neofetch data: {os_type}")
+
             # Save the report
             saved_path, audit_period = self.save_report(hostname, username, report_type, data, os_type)
 
@@ -962,7 +967,7 @@ class ReportHandler(BaseHTTPRequestHandler):
 
             # Save tar file with timestamp to allow multiple uploads
             timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-            tar_filename = f"submission-{timestamp}.tar.gz"
+            tar_filename = f"honeybadger-{timestamp}.tar.gz"
             tar_path = dir_path / tar_filename
 
             # Write tar data to file
