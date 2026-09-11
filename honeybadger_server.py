@@ -1271,12 +1271,16 @@ class ReportHandler(BaseHTTPRequestHandler):
                 const row = rows[i];
                 const statusCell = row.cells[5].textContent.toLowerCase();
 
+                // Note: "incomplete" contains the substring "complete", so the
+                // incomplete check must be evaluated first / excluded explicitly.
+                const isIncomplete = statusCell.includes('incomplete');
+
                 if (filterValue === 'all') {{
                     row.style.display = '';
-                }} else if (filterValue === 'complete' && statusCell.includes('complete')) {{
-                    row.style.display = '';
-                }} else if (filterValue === 'incomplete' && statusCell.includes('incomplete')) {{
-                    row.style.display = '';
+                }} else if (filterValue === 'complete') {{
+                    row.style.display = (!isIncomplete && statusCell.includes('complete')) ? '' : 'none';
+                }} else if (filterValue === 'incomplete') {{
+                    row.style.display = isIncomplete ? '' : 'none';
                 }} else {{
                     row.style.display = 'none';
                 }}
@@ -1420,34 +1424,6 @@ class ReportHandler(BaseHTTPRequestHandler):
             Legend: N=Neofetch, L=Lynis, T=Trivy, V=Vulnix, TAR=Tar Archive
         </div>
     </div>
-
-    <script>
-        // Period selector
-        function switchPeriod() {
-            var period = document.getElementById('periodSelect').value;
-            window.location.href = '/?period=' + period;
-        }
-
-        // Filter functionality
-        function filterTable() {
-            var statusFilter = document.getElementById('statusFilter').value;
-            var table = document.getElementById('complianceTable');
-            var rows = table.getElementsByTagName('tbody')[0].getElementsByTagName('tr');
-
-            for (var i = 0; i < rows.length; i++) {
-                var row = rows[i];
-                var statusCell = row.cells[5]; // Status column
-
-                if (statusFilter === 'all') {
-                    row.style.display = '';
-                } else if (statusFilter === 'complete') {
-                    row.style.display = statusCell.textContent.includes('Complete') ? '' : 'none';
-                } else if (statusFilter === 'incomplete') {
-                    row.style.display = statusCell.textContent.includes('Incomplete') ? '' : 'none';
-                }
-            }
-        }
-    </script>
 </body>
 </html>"""
 
