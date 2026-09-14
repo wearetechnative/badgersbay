@@ -27,3 +27,7 @@ Thumbs.db
 
 # reports
 reports/*
+
+# Credentials (generate locally, see README)
+tokens.yaml
+password.txt

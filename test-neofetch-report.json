@@ -1,0 +1,10 @@
+{
+  "os": "NixOS 24.05",
+  "hostname": "testhost",
+  "kernel": "6.1.0",
+  "uptime": "5 days, 3 hours",
+  "packages": "2341 (nix-system)",
+  "shell": "bash 5.2.15",
+  "cpu": "Intel Core i7-10700K (16) @ 5.100GHz",
+  "memory": "8192MiB / 32768MiB"
+}
