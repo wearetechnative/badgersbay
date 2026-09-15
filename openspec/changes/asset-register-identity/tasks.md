@@ -61,27 +61,27 @@
 
 ## 7. Round view
 
-- [ ] 7.1 Determine the currently open round from today and `audit_months`
-- [ ] 7.2 Row per register entry; LEFT JOIN against submissions in that round
-- [ ] 7.3 Progress count, per-owner breakdown, outstanding list with last-seen
-- [ ] 7.4 Unmatched submissions surfaced as a warning block, grouped by reason:
+- [x] 7.1 Determine the currently open round from today and `audit_months`
+- [x] 7.2 Row per register entry; LEFT JOIN against submissions in that round
+- [x] 7.3 Progress count, per-owner breakdown, outstanding list with last-seen
+- [x] 7.4 Unmatched submissions surfaced as a warning block, grouped by reason:
       missing serial (client problem) versus unknown serial (register problem)
 
 ## 8. Fleet view
 
-- [ ] 8.1 Latest submission per register entry, regardless of round
-- [ ] 8.2 Age relative to the current round: fresh / previous round / stale
-- [ ] 8.3 Assets that have never submitted appear with "never seen"
+- [x] 8.1 Latest submission per register entry, regardless of round
+- [x] 8.2 Age relative to the current round: fresh / previous round / stale
+- [x] 8.3 Assets that have never submitted appear with "never seen"
 
 ## 9. Downloads
 
-- [ ] 9.1 TAR download filename follows the register convention
+- [x] 9.1 TAR download filename follows the register convention
       `<asset_id>-<YYYY-MM-DD>-<owner-slug>.tar.gz`
 
 ## 10. Docs
 
-- [ ] 10.1 `README.md`: register setup, CSV format, layout
-- [ ] 10.2 `CLAUDE.md`: new storage layout, corrected line count, retire the
+- [x] 10.1 `README.md`: register setup, CSV format, layout
+- [x] 10.2 `CLAUDE.md`: new storage layout, corrected line count, retire the
       single-file principle explicitly
 
 ## 11. Register lifecycle

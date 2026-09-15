@@ -8,6 +8,7 @@ VERSION = "1.1.0"
 import json
 import os
 import csv
+import re
 import yaml
 import time
 import tarfile
@@ -19,6 +20,7 @@ from datetime import datetime, date, timedelta
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import unquote
+from html import escape as html_escape
 import logging
 
 # Configure logging
@@ -660,6 +662,36 @@ REQUIREMENT_SATISFIED_BY = {
 # on is the fastest way to teach people to ignore a dashboard. See bean
 # wtoorren-cikq.
 MANUAL_CLASSES = {'windows'}
+
+
+def owner_to_slug(owner):
+    """Render an owner name the way the register's proof_file column does.
+
+    First name and surname, lowercased, with Dutch name infixes dropped - the
+    convention the compliance sheet already uses, so a downloaded archive can
+    go straight into the audit folder under the name the sheet expects.
+
+    Examples:
+        >>> owner_to_slug('Wouter van der Toorren')
+        'wouter.toorren'
+        >>> owner_to_slug('Richard van Os')
+        'richard.os'
+        >>> owner_to_slug('Pim Snel')
+        'pim.snel'
+        >>> owner_to_slug('Madonna')
+        'madonna'
+        >>> owner_to_slug('')
+        ''
+    """
+    infixes = {'van', 'de', 'der', 'den', 'het', 'ten', 'ter', 'te', 'op', 'aan'}
+    parts = [re.sub(r'[^a-z0-9]', '', p.lower()) for p in (owner or '').split()]
+    parts = [p for p in parts if p]
+    significant = [p for p in parts if p not in infixes] or parts
+    if not significant:
+        return ''
+    if len(significant) == 1:
+        return significant[0]
+    return f"{significant[0]}.{significant[-1]}"
 
 
 def requirements_for_class(asset_class, overrides=None):
@@ -1975,6 +2007,428 @@ class ReportHandler(BaseHTTPRequestHandler):
 
         return reports
 
+    DASHBOARD_CSS = """
+        :root{--ground:#f6f7f8;--surface:#fff;--surface-2:#eceff2;--surface-3:#f9fafb;
+          --line:#d8dde2;--line-soft:#e6eaee;--ink:#1b1f24;--ink-2:#59626c;--ink-3:#8a939d;
+          --accent:#2f5d8c;--accent-soft:#e3ecf5;--ok:#2c7a51;--ok-soft:#e0f0e7;
+          --warn:#9a6a0a;--warn-soft:#f7edd8;--crit:#b23b32;--crit-soft:#f8e3e1;
+          --manual:#665a8c;--manual-soft:#eae7f3;}
+        @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+          --ground:#14171b;--surface:#1b2026;--surface-2:#232a31;--surface-3:#1f252b;
+          --line:#303942;--line-soft:#272f37;--ink:#e3e8ed;--ink-2:#98a3ae;--ink-3:#6d7883;
+          --accent:#72a6dc;--accent-soft:#1d2c3c;--ok:#5cb684;--ok-soft:#182c22;
+          --warn:#d7a446;--warn-soft:#2e2718;--crit:#e08177;--crit-soft:#32201e;
+          --manual:#a596cd;--manual-soft:#242038;}}
+        *{box-sizing:border-box}
+        body{margin:0;background:var(--ground);color:var(--ink);font-size:14px;line-height:1.5;
+          font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+        .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+        .wrap{max-width:1120px;margin:0 auto;padding:28px 24px 64px}
+        .top{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;
+          flex-wrap:wrap;margin-bottom:22px}
+        .brand{display:flex;align-items:baseline;gap:10px}
+        .brand h1{font-size:19px;font-weight:600;margin:0}
+        .ctx{text-align:right;font-size:12.5px;color:var(--ink-2)}
+        .ctx strong{color:var(--ink)}
+        .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:26px}
+        .tab{font:inherit;font-weight:500;color:var(--ink-2);padding:9px 14px;
+          border-bottom:2px solid transparent;margin-bottom:-1px;text-decoration:none}
+        .tab:hover{color:var(--ink)}
+        .tab.on{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+        .summary{background:var(--surface);border:1px solid var(--line);border-radius:6px;
+          padding:22px 24px;margin-bottom:26px;display:grid;
+          grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:32px}
+        @media (max-width:760px){.summary{grid-template-columns:1fr}}
+        .sum-h{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;
+          color:var(--ink-3);font-weight:600;margin:0 0 12px}
+        .figure{display:flex;align-items:baseline;gap:9px;margin-bottom:14px}
+        .figure .big{font-size:38px;font-weight:600;line-height:1}
+        .figure .of{font-size:14px;color:var(--ink-2)}
+        .meter{display:flex;height:9px;border-radius:5px;overflow:hidden;
+          background:var(--surface-2);margin-bottom:14px}
+        .seg-ok{background:var(--ok)}.seg-exc{background:var(--warn)}.seg-open{background:var(--line)}
+        .key{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:12.5px;color:var(--ink-2)}
+        .key i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px}
+        .key b{color:var(--ink)}
+        .owners{display:flex;flex-direction:column;gap:7px}
+        .owner{display:grid;grid-template-columns:minmax(0,1fr) 62px 44px;align-items:center;
+          gap:12px;font-size:13px}
+        .owner .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .owner .bar{height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden}
+        .owner .bar span{display:block;height:100%;background:var(--ok)}
+        .owner .ct{font-size:12px;color:var(--ink-2);text-align:right}
+        .owner.done .ct{color:var(--ok);font-weight:600}
+        .owner.zero .nm{font-weight:600}.owner.zero .ct{color:var(--crit)}
+        .alert{border:1px solid var(--line);border-left:3px solid var(--warn);
+          background:var(--surface);border-radius:5px;padding:14px 18px;margin-bottom:26px}
+        .alert h3{margin:0 0 4px;font-size:13.5px;font-weight:600}
+        .alert p{margin:0 0 10px;font-size:12.5px;color:var(--ink-2);max-width:68ch}
+        .alert.crit{border-left-color:var(--crit)}
+        .tblwrap{border:1px solid var(--line);border-radius:6px;background:var(--surface);
+          overflow-x:auto;margin-bottom:12px}
+        table{width:100%;border-collapse:collapse;min-width:720px}
+        thead th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);
+          font-weight:600;text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);
+          background:var(--surface-3);white-space:nowrap}
+        tbody td{padding:11px 14px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
+        tbody tr:last-child td{border-bottom:0}
+        .grp td{background:var(--surface-3);padding:7px 14px;font-size:11px;font-weight:600;
+          letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+        tr.s-ok td:first-child{box-shadow:inset 3px 0 0 var(--ok)}
+        tr.s-exc td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+        tr.s-open td:first-child{box-shadow:inset 3px 0 0 var(--crit)}
+        tr.s-man td:first-child{box-shadow:inset 3px 0 0 var(--manual)}
+        .sub{display:block;font-size:11.5px;color:var(--ink-3);margin-top:2px}
+        .pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;
+          padding:2px 8px;border-radius:10px;white-space:nowrap}
+        .p-ok{background:var(--ok-soft);color:var(--ok)}
+        .p-exc{background:var(--warn-soft);color:var(--warn)}
+        .p-open{background:var(--crit-soft);color:var(--crit)}
+        .p-man{background:var(--manual-soft);color:var(--manual)}
+        .badge{display:inline-block;font-size:11px;font-weight:600;padding:1px 6px;
+          border-radius:3px;background:var(--ok-soft);color:var(--ok);margin-right:3px;
+          text-decoration:none}
+        .badge.tar{background:var(--accent-soft);color:var(--accent)}
+        .badge.none{background:var(--surface-2);color:var(--ink-3)}
+        .chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;white-space:nowrap}
+        .chip i{width:7px;height:7px;border-radius:50%;flex:none}
+        .d-fresh i{background:var(--ok)}.d-prev i{background:var(--warn)}.d-stale i{background:var(--crit)}
+        .d-fresh{color:var(--ok);font-weight:600}.d-prev{color:var(--warn)}.d-stale{color:var(--crit)}
+        .legend{font-size:12px;color:var(--ink-3);display:flex;flex-wrap:wrap;gap:6px 20px;
+          margin-bottom:24px}
+        .empty{padding:40px 20px;text-align:center;color:var(--ink-3)}
+        .dash{color:var(--ink-3)}
+    """
+
+    def _dashboard_shell(self, title, active_tab, period, body):
+        """Wrap a view in the shared page shell."""
+        register = self.asset_register
+        register_note = (
+            f"Register: {len(register.rows)} rows"
+            if register and register.loaded else
+            "No asset register configured"
+        )
+        tabs = ''.join(
+            f'<a class="tab{" on" if key == active_tab else ""}" '
+            f'href="/?view={key}&period={html_escape(period)}">{label}</a>'
+            for key, label in (('round', 'Scan round'), ('fleet', 'All assets'))
+        )
+        return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{html_escape(title)}</title><style>{self.DASHBOARD_CSS}</style></head>
+<body><div class="wrap">
+  <div class="top">
+    <div class="brand"><span>&#129441;</span><h1>Badgersbay</h1></div>
+    <div class="ctx">Audit round <strong class="mono">{html_escape(period)}</strong><br>{html_escape(register_note)}</div>
+  </div>
+  <div class="tabs">{tabs}</div>
+  {body}
+</div></body></html>"""
+
+    def generate_round_view_html(self, period):
+        """Progress of one audit round against the asset register."""
+        state = compute_round_state(
+            self.asset_register, self.compliance_cache, period,
+            self.config.audit_months, self.config.grace_weeks,
+            class_requirements=getattr(self.config, 'class_requirements', None),
+        )
+
+        if not (self.asset_register and self.asset_register.loaded):
+            body = ('<div class="alert crit"><h3>No asset register configured</h3>'
+                    '<p>Without a register the server can show what arrived but not which '
+                    'systems are missing. Set <code>compliance.asset_register</code> in '
+                    'config.yaml to the CSV exported from the ISO compliance sheet.</p></div>')
+            return self._dashboard_shell('Badgersbay Scan Round', 'round', period, body)
+
+        scanned, accounted = state['scanned'], state['accounted']
+        outstanding, unexplained = state['outstanding'], state['unexplained']
+        total = state['denominator'] or 1
+
+        def pct(n):
+            return f"{n / total * 100:.4f}%"
+
+        # This panel is a call list, so it counts what still needs chasing.
+        # An accounted-for asset is resolved even though it was never scanned:
+        # its owner has nothing left to do.
+        owners = {}
+        for bucket, resolved in ((scanned, True), (accounted, True),
+                                 (outstanding, False), (unexplained, False)):
+            for row in bucket:
+                owner = row['entry']['owner'] or 'unassigned'
+                tally = owners.setdefault(owner, [0, 0])
+                tally[1] += 1
+                if resolved:
+                    tally[0] += 1
+        owner_rows = ''.join(
+            f'<div class="owner {"done" if d == t else "zero" if d == 0 else ""}">'
+            f'<span class="nm">{html_escape(name)}</span>'
+            f'<span class="bar"><span style="width:{d / t * 100:.0f}%"></span></span>'
+            f'<span class="ct mono">{d}/{t}</span></div>'
+            for name, (d, t) in sorted(owners.items(), key=lambda kv: (kv[1][0] / kv[1][1], kv[0]))
+        )
+
+        manual_note = (
+            f'<p style="margin:14px 0 0;font-size:12.5px;color:var(--ink-2);max-width:46ch">'
+            f'{len(state["manual"])} asset(s) are handled manually while their client cannot '
+            f'submit, and are not counted in the denominator.</p>'
+            if state['manual'] else ''
+        )
+
+        summary = f"""
+  <div class="summary">
+    <div>
+      <h2 class="sum-h">Progress</h2>
+      <div class="figure"><span class="big mono">{len(scanned)}</span>
+        <span class="of">of {state['denominator']} assets scanned</span></div>
+      <div class="meter">
+        <span class="seg-ok" style="width:{pct(len(scanned))}"></span>
+        <span class="seg-exc" style="width:{pct(len(accounted))}"></span>
+        <span class="seg-open" style="width:{pct(len(outstanding) + len(unexplained))}"></span>
+      </div>
+      <div class="key">
+        <span><i class="seg-ok"></i><b>{len(scanned)}</b> scanned</span>
+        <span><i class="seg-exc"></i><b>{len(accounted)}</b> accounted for</span>
+        <span><i class="seg-open"></i><b>{len(outstanding) + len(unexplained)}</b> outstanding</span>
+      </div>
+      <p style="margin:14px 0 0;font-size:12.5px;color:var(--ink-2);max-width:46ch">
+        Scan window {state['scan_start']} to {state['scan_end']}.
+        {'Round is closeable.' if state['closeable'] else 'Round closes when nothing is outstanding.'}
+      </p>{manual_note}
+    </div>
+    <div><h2 class="sum-h">By owner</h2><div class="owners">{owner_rows}</div></div>
+  </div>"""
+
+        alerts = ''
+        if state['unmatched']:
+            by_reason = {}
+            for record in state['unmatched']:
+                by_reason.setdefault(record['unmatched_reason'], []).append(record)
+            blocks = []
+            for reason, records in sorted(by_reason.items()):
+                explanation = (
+                    'The archive carried no usable hardware serial. That is a client problem: '
+                    'the audit ran without root, or the platform writes the wrong field.'
+                    if reason == 'no_serial' else
+                    'The serial is not in the register. That is a register problem: a new '
+                    'asset, a department outside scope, or a wrong serial column.'
+                )
+                rows = ''.join(
+                    f'<div class="mono" style="font-size:12.5px">'
+                    f'{html_escape(record["hostname"])}/{html_escape(record["username"])} '
+                    f'&middot; {html_escape(str(record["serial"] or "no serial"))} '
+                    f'&middot; {html_escape(record["submitted_at"][:16])}</div>'
+                    for record in records
+                )
+                blocks.append(
+                    f'<div class="alert"><h3>{len(records)} submission(s): '
+                    f'{html_escape(reason.replace("_", " "))}</h3>'
+                    f'<p>{explanation}</p>{rows}</div>'
+                )
+            alerts += ''.join(blocks)
+
+        if unexplained:
+            rows = ''.join(
+                f'<div class="mono" style="font-size:12.5px">'
+                f'{html_escape(row["entry"]["asset_id"])} &middot; '
+                f'{html_escape(row["entry"]["owner"])} &middot; left '
+                f'{row["entry"]["valid_to"]}</div>'
+                for row in unexplained
+            )
+            alerts += (
+                f'<div class="alert crit"><h3>{len(unexplained)} asset(s) left scope '
+                f'without a reason</h3><p>These are counted as outstanding rather than '
+                f'removed from the denominator. Dropping them silently would raise the '
+                f'coverage rate, which is the one direction a compliance figure must never '
+                f'move by accident.</p>{rows}</div>'
+            )
+
+        return self._dashboard_shell(
+            'Badgersbay Scan Round', 'round', period,
+            summary + alerts + self._round_table(state, period)
+        )
+
+    def _round_table(self, state, period):
+        """The per-asset table, grouped by state."""
+        def row_html(row, css, status_html, reports_html, seen):
+            entry = row['entry']
+            return f"""
+            <tr class="{css}">
+              <td class="mono"><strong>{html_escape(entry['asset_id'])}</strong></td>
+              <td>{html_escape(entry['owner'])}</td>
+              <td>{html_escape(entry['class'])}</td>
+              <td class="mono" style="font-size:12px">{html_escape(entry['serial'])}</td>
+              <td class="mono">{seen}</td>
+              <td>{reports_html}</td>
+              <td>{status_html}</td>
+            </tr>"""
+
+        latest = self.compliance_cache.latest_by_asset() if self.compliance_cache else {}
+
+        def last_seen(entry):
+            record = latest.get(entry['asset_id'])
+            if not record:
+                return '<span class="dash">never</span>'
+            return html_escape(record['submitted_at'][:10])
+
+        def badges(record, entry):
+            if not record:
+                return '<span class="badge none">none</span>'
+            out = []
+            for report_type in record.get('reports', []):
+                filename = REPORT_FILENAMES.get(report_type)
+                if filename and record.get('record_dir'):
+                    href = f"/evidence/{html_escape(entry['serial'])}/" \
+                           f"{html_escape(os.path.basename(record['record_dir']))}/{filename}"
+                    out.append(f'<a class="badge" href="{href}">{report_type[0].upper()}</a>')
+                else:
+                    out.append(f'<span class="badge">{report_type[0].upper()}</span>')
+            if record.get('evidence'):
+                href = f"/evidence/{html_escape(entry['serial'])}/" \
+                       f"{html_escape(os.path.basename(record['record_dir']))}/" \
+                       f"{html_escape(record['evidence'])}"
+                out.append(f'<a class="badge tar" href="{href}">TAR</a>')
+            return ''.join(out) or '<span class="badge none">none</span>'
+
+        groups = []
+        if state['scanned']:
+            rows = []
+            for row in state['scanned']:
+                late = '' if row['timeliness'] == 'on_time' else \
+                    '<span class="sub">covered late</span>'
+                owner_warning = '<span class="sub">evidence predates current holder</span>' \
+                    if row['record'].get('evidence_predates_owner') else ''
+                if row['complete']:
+                    status = f'<span class="pill p-ok">&#10003; scanned</span>{late}{owner_warning}'
+                else:
+                    status = (f'<span class="pill p-open">&#9888; incomplete</span>'
+                              f'<span class="sub">missing: {html_escape(", ".join(row["missing"]))}</span>'
+                              f'{late}{owner_warning}')
+                rows.append(row_html(row, 's-ok' if row['complete'] else 's-open', status,
+                                     badges(row['record'], row['entry']),
+                                     html_escape(row['record']['submitted_at'][:10])))
+            groups.append((f"Scanned this round &mdash; {len(state['scanned'])}", rows))
+
+        if state['accounted']:
+            rows = [row_html(
+                row, 's-exc',
+                f'<span class="pill p-exc">&#9680; accounted for</span>'
+                f'<span class="sub">{html_escape(row["entry"]["departure_reason"])}</span>',
+                '<span class="badge none">none</span>', last_seen(row['entry'])
+            ) for row in state['accounted']]
+            groups.append((f"Accounted for &mdash; {len(state['accounted'])}", rows))
+
+        for bucket, label, css, status in (
+            (state['outstanding'], 'Outstanding', 's-open',
+             '<span class="pill p-open">&#9888; outstanding</span>'),
+            (state['unexplained'], 'Left scope without a reason', 's-open',
+             '<span class="pill p-open">&#9888; unexplained departure</span>'),
+            (state['manual'], 'Manual &mdash; outside the denominator', 's-man',
+             '<span class="pill p-man">&#9675; manual</span>'
+             '<span class="sub">client cannot submit yet</span>'),
+        ):
+            if not bucket:
+                continue
+            rows = [row_html(row, css, status, '<span class="badge none">none</span>',
+                             last_seen(row['entry'])) for row in bucket]
+            groups.append((f"{label} &mdash; {len(bucket)}", rows))
+
+        if state['retired']:
+            rows = [row_html({'entry': entry}, 's-man',
+                             '<span class="pill p-man">retired</span>'
+                             f'<span class="sub">{html_escape(entry["departure_reason"])}</span>',
+                             '<span class="badge none">none</span>', last_seen(entry))
+                    for entry in state['retired']]
+            groups.append((f"Retired &mdash; {len(state['retired'])}", rows))
+
+        if not groups:
+            return '<div class="tblwrap"><div class="empty">No assets in scope for this round</div></div>'
+
+        body = ''.join(
+            f'<tr class="grp"><td colspan="7">{label}</td></tr>' + ''.join(rows)
+            for label, rows in groups
+        )
+        return f"""
+  <div class="tblwrap"><table>
+    <thead><tr><th style="width:104px">Asset</th><th>Owner</th><th style="width:78px">Class</th>
+      <th style="width:150px">Serial</th><th style="width:104px">Last seen</th>
+      <th style="width:96px">Reports</th><th style="width:230px">Status</th></tr></thead>
+    <tbody>{body}</tbody>
+  </table></div>
+  <div class="legend"><span>F = Fastfetch</span><span>L = Lynis</span>
+    <span>TAR = stored archive</span></div>"""
+
+    def generate_fleet_view_html(self, period):
+        """Latest known state of every asset, regardless of round."""
+        register = self.asset_register
+        if not (register and register.loaded):
+            body = ('<div class="alert crit"><h3>No asset register configured</h3>'
+                    '<p>The fleet view lists the register, so it needs one.</p></div>')
+            return self._dashboard_shell('Badgersbay Fleet', 'fleet', period, body)
+
+        latest = self.compliance_cache.latest_by_asset() if self.compliance_cache else {}
+        previous = None
+        try:
+            periods = sorted({s['audit_period'] for s in self.compliance_cache.submissions})
+            older = [p for p in periods if p < period]
+            previous = older[-1] if older else None
+        except Exception:
+            previous = None
+
+        seen = set()
+        rows = []
+        for entry in sorted(register.rows, key=lambda e: e['asset_id']):
+            if entry['asset_id'] in seen:
+                continue
+            seen.add(entry['asset_id'])
+            record = latest.get(entry['asset_id'])
+
+            if record is None:
+                freshness = '<span class="chip d-stale"><i></i>never submitted</span>'
+                css, when, os_type = 's-open', '<span class="dash">never</span>', \
+                    '<span class="dash">unknown</span>'
+            else:
+                when = html_escape(record['submitted_at'][:10])
+                os_type = html_escape(record.get('os_type') or 'unknown')
+                if record['audit_period'] == period:
+                    freshness = f'<span class="chip d-fresh"><i></i>{html_escape(period)}</span>'
+                    css = 's-ok'
+                elif previous and record['audit_period'] == previous:
+                    freshness = (f'<span class="chip d-prev"><i></i>'
+                                 f'{html_escape(record["audit_period"])}</span>')
+                    css = 's-exc'
+                else:
+                    freshness = (f'<span class="chip d-stale"><i></i>'
+                                 f'{html_escape(record["audit_period"])}</span>')
+                    css = 's-open'
+
+            status = 'retired' if entry['status'] == 'retired' else html_escape(entry['class'])
+            rows.append(f"""
+            <tr class="{css}">
+              <td class="mono"><strong>{html_escape(entry['asset_id'])}</strong></td>
+              <td>{html_escape(entry['owner'])}</td>
+              <td>{status}</td>
+              <td>{os_type}</td>
+              <td class="mono">{when}</td>
+              <td>{freshness}</td>
+            </tr>""")
+
+        table = f"""
+  <div class="tblwrap"><table>
+    <thead><tr><th style="width:104px">Asset</th><th>Owner</th><th style="width:78px">Class</th>
+      <th style="width:200px">Operating system</th><th style="width:104px">Last seen</th>
+      <th style="width:150px">Coverage</th></tr></thead>
+    <tbody>{''.join(rows) or '<tr><td colspan="6" class="empty">Register is empty</td></tr>'}</tbody>
+  </table></div>
+  <div class="legend">
+    <span><span class="chip d-fresh"><i></i>current round</span></span>
+    <span><span class="chip d-prev"><i></i>previous round only</span></span>
+    <span><span class="chip d-stale"><i></i>older, or never</span></span>
+    <span>Disk encryption, screen lock, firewall and hardening score arrive with
+      asset-inventory.json from the client.</span>
+  </div>"""
+        return self._dashboard_shell('Badgersbay Fleet', 'fleet', period, table)
+
     def generate_compliance_dashboard_html(self, selected_period=None):
         """Generate compliance dashboard HTML"""
 
@@ -2767,10 +3221,14 @@ class ReportHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
             if self.config.compliance_enabled:
-                # Compliance dashboard
-                selected_period = query_params.get('period', [None])[0]
-                html = self.generate_compliance_dashboard_html(selected_period)
-                logger.info(f"Generated compliance dashboard HTML: {len(html)} chars")
+                period = query_params.get('period', [None])[0] \
+                    or get_audit_period(datetime.now(), self.config.audit_months)
+                view = query_params.get('view', ['round'])[0]
+                if view == 'fleet':
+                    html = self.generate_fleet_view_html(period)
+                else:
+                    html = self.generate_round_view_html(period)
+                logger.info(f"Generated {view} view for {period}: {len(html)} chars")
             else:
                 # Legacy dashboard
                 html = self.generate_status_html()
@@ -2780,6 +3238,51 @@ class ReportHandler(BaseHTTPRequestHandler):
             logger.info(f"Encoded to {len(encoded)} bytes, writing to client...")
             self.wfile.write(encoded)
             logger.info("Dashboard sent successfully")
+        elif self.path.startswith('/evidence/'):
+            # Serve a file from one submission record.
+            # /evidence/<serial>/<timestamp>/<filename>
+            try:
+                parts = [unquote(p) for p in self.path[len('/evidence/'):].split('/')]
+                if len(parts) != 3 or any(p in ('', '.', '..') or '/' in p for p in parts):
+                    self._send_html_error(400, "Malformed evidence path")
+                    return
+
+                serial, stamp, filename = parts
+                base = (Path(self.config.storage_location) / 'submissions').resolve()
+                target = (base / serial / stamp / filename).resolve()
+                if not str(target).startswith(str(base) + os.sep) or not target.is_file():
+                    self._send_html_error(404, "Evidence not found")
+                    return
+
+                # Downloads carry the register's proof-file convention, so the
+                # file can go straight into the audit folder under the name the
+                # compliance sheet expects.
+                download_name = target.name
+                record = target.parent / 'submission.json'
+                if record.is_file() and target.suffix == '.gz':
+                    try:
+                        with open(record) as handle:
+                            meta = json.load(handle)
+                        if meta.get('asset_id'):
+                            owner_slug = owner_to_slug(meta.get('owner'))
+                            download_name = (
+                                f"{meta['asset_id']}-{meta['submitted_at'][:10]}"
+                                f"{'-' + owner_slug if owner_slug else ''}.tar.gz"
+                            )
+                    except Exception as e:
+                        logger.warning(f"Could not build download name for {target}: {e}")
+
+                content_type = 'application/gzip' if target.suffix == '.gz' else 'application/json'
+                payload = target.read_bytes()
+                self.send_response(200)
+                self.send_header('Content-Type', content_type)
+                self.send_header('Content-Disposition', f'attachment; filename="{download_name}"')
+                self.send_header('Content-Length', str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            except Exception as e:
+                logger.error(f"Error serving evidence {self.path}: {e}", exc_info=True)
+                self._send_html_error(500, "Internal server error")
         elif self.path.startswith('/reports/'):
             # Serve report JSON files
             try:
