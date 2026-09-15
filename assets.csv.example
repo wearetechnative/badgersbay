@@ -1,0 +1,13 @@
+asset_id,serial,owner,model,class,status,owner_since,valid_from,valid_to,departure_reason
+TARI-00002,FVFCL102L411,Pim Snel,Macbook A2159 EMC 3301,macos,active,2024-01-01,2024-01-01,,
+TARI-00017,FVFFP1TPQ05N,Sammy Kooti,MacBook Pro,macos,active,2024-01-01,2024-01-01,,
+TARI-00023,PF50L2MR,Wouter van der Toorren,LENOVO 21K9CTO1WW,linux,active,2024-01-01,2024-01-01,,
+TARI-00030,FVFZR9LXL40Y,Bas Anneveld,MacBook Pro 13,macos,active,2024-01-01,2024-01-01,,
+TARI-00031,AC06CMEP,Elma Aker,Lenovo ideapad 330S,windows,active,2024-01-01,2024-01-01,,
+TARI-00034,PF-4VBTLB,Richard van Os,Lenovo Thinkpad 21JN-00ALMH,windows,active,2024-01-01,2024-01-01,,
+TARI-00037,PF3NFHJL,Pankhuri Prakash,"Lenovo Ideapad 3, 15"" (i5, 2022)",linux,active,2024-01-01,2024-01-01,2026-08-01,replaced by MP1Y69AC
+TARI-00037,MP1Y69AC,Pankhuri Prakash,Lenovo IdeaPad 5 14ARE05,linux,active,2026-08-01,2026-08-01,,
+TARI-00042,190856402801887,Pim Snel,AI LAB Server,linux,active,2024-01-01,2024-01-01,,
+TARI-00045,FRANDGCPA5530200H9,Jeroen Penders,"Laptop Framework 13"" (AMD Ryzen 7040)",linux,active,2024-01-01,2024-01-01,,
+TARI-00046,FRANDGCPA550730052,Luca Kasper,"Laptop Framework 13"" (AMD Ryzen 7040)",linux,active,2024-01-01,2024-01-01,,
+TARI-00047,FRANMDCPA750850030,Pim Snel,Framework FRANMDCP07,linux,active,2024-01-01,2024-01-01,,

@@ -7,6 +7,7 @@ VERSION = "1.1.0"
 
 import json
 import os
+import csv
 import yaml
 import time
 import tarfile
@@ -14,7 +15,7 @@ import io
 import argparse
 import secrets
 import base64
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import unquote
@@ -369,41 +370,385 @@ def is_audit_period_dirname(name):
 
 def get_audit_period(upload_date, audit_months):
     """
-    Calculate which audit period an upload belongs to.
+    Determine which audit round a submission belongs to.
 
-    Maps upload to the next audit month >= current month.
-    If no audit month remains this year, use first audit month of next year.
+    A round opens in its audit month and stays open until the next one begins,
+    so a submission belongs to the most recent audit month at or before its
+    date. Scanning a fleet takes weeks, and a round that ran into the following
+    month must keep its late submissions rather than filing them forward into a
+    round that has not started.
 
     Args:
-        upload_date: datetime object of when upload was received
+        upload_date: datetime or date of when the submission arrived
         audit_months: list of integers (1-12) representing audit months
 
     Returns:
         str: Audit period in format "YYYY-MM"
 
     Examples:
-        >>> get_audit_period(datetime(2026, 3, 15), [3, 9])
-        '2026-03'
-        >>> get_audit_period(datetime(2026, 4, 10), [3, 9])
+        >>> get_audit_period(datetime(2026, 9, 15), [3, 9])
         '2026-09'
-        >>> get_audit_period(datetime(2026, 10, 5), [3, 9])
-        '2027-03'
+        >>> get_audit_period(datetime(2026, 10, 2), [3, 9])
+        '2026-09'
+        >>> get_audit_period(datetime(2026, 4, 10), [3, 9])
+        '2026-03'
+        >>> get_audit_period(datetime(2026, 2, 10), [3, 9])
+        '2025-09'
+        >>> get_audit_period(datetime(2026, 3, 1), [3, 9])
+        '2026-03'
     """
     year = upload_date.year
     month = upload_date.month
 
-    # Find next audit month >= current month this year
-    future_months = [m for m in sorted(audit_months) if m >= month]
+    # The most recent audit month at or before this one, in this year.
+    past_months = [m for m in sorted(audit_months) if m <= month]
 
-    if future_months:
-        # Use first audit month >= current month this year
-        target_month = min(future_months)
-        return f"{year}-{target_month:02d}"
+    if past_months:
+        return f"{year}-{max(past_months):02d}"
+
+    # Before the first audit month of the year: the last round of the year before.
+    return f"{year - 1}-{max(audit_months):02d}"
+
+
+def parse_audit_period(period):
+    """Return the first day of an audit period given as 'YYYY-MM'.
+
+    Examples:
+        >>> parse_audit_period('2026-09')
+        datetime.date(2026, 9, 1)
+    """
+    year, month = period.split('-')
+    return date(int(year), int(month), 1)
+
+
+def next_audit_period(period, audit_months):
+    """The round that follows the given one.
+
+    Examples:
+        >>> next_audit_period('2026-03', [3, 9])
+        '2026-09'
+        >>> next_audit_period('2026-09', [3, 9])
+        '2027-03'
+    """
+    start = parse_audit_period(period)
+    later = [m for m in sorted(audit_months) if m > start.month]
+    if later:
+        return f"{start.year}-{min(later):02d}"
+    return f"{start.year + 1}-{min(audit_months):02d}"
+
+
+def get_round_windows(period, audit_months, grace_weeks):
+    """Return (scan_start, scan_end, coverage_end) for an audit round.
+
+    A round has two windows, and conflating them is what made submissions file
+    themselves into rounds that had not begun:
+
+      scan window      the audit month plus the grace period. The work happens
+                       here, and this window decides which assets belong to the
+                       round and whether a submission is on time.
+      coverage window  runs until the next round opens. This is the period the
+                       round makes a statement about.
+
+    Examples:
+        >>> get_round_windows('2026-09', [3, 9], 4)
+        (datetime.date(2026, 9, 1), datetime.date(2026, 10, 29), datetime.date(2027, 2, 28))
+        >>> get_round_windows('2026-03', [3, 9], 0)
+        (datetime.date(2026, 3, 1), datetime.date(2026, 4, 1), datetime.date(2026, 8, 31))
+    """
+    scan_start = parse_audit_period(period)
+    following = parse_audit_period(next_audit_period(period, audit_months))
+
+    # End of the audit month itself, then the grace period on top.
+    if scan_start.month == 12:
+        month_end = date(scan_start.year + 1, 1, 1)
     else:
-        # All audit months are in the past this year
-        # Use first audit month of next year
-        target_month = min(audit_months)
-        return f"{year+1}-{target_month:02d}"
+        month_end = date(scan_start.year, scan_start.month + 1, 1)
+    scan_end = month_end + timedelta(weeks=grace_weeks)
+
+    coverage_end = following - timedelta(days=1)
+    return scan_start, min(scan_end, coverage_end), coverage_end
+
+
+def classify_submission(submitted_at, audit_months, grace_weeks):
+    """Return (period, 'on_time'|'late') for a submission.
+
+    Late submissions still count toward their round. The distinction is kept
+    because "this asset was scanned three weeks after the deadline" is an
+    auditable fact, not a rounding error.
+
+    Examples:
+        >>> classify_submission(datetime(2026, 9, 15), [3, 9], 4)
+        ('2026-09', 'on_time')
+        >>> classify_submission(datetime(2026, 10, 2), [3, 9], 4)
+        ('2026-09', 'on_time')
+        >>> classify_submission(datetime(2026, 12, 1), [3, 9], 4)
+        ('2026-09', 'late')
+        >>> classify_submission(datetime(2026, 4, 10), [3, 9], 0)
+        ('2026-03', 'late')
+    """
+    period = get_audit_period(submitted_at, audit_months)
+    _, scan_end, _ = get_round_windows(period, audit_months, grace_weeks)
+
+    moment = submitted_at.date() if isinstance(submitted_at, datetime) else submitted_at
+    return period, ('on_time' if moment <= scan_end else 'late')
+
+
+# Values a client writes when it could not read a serial. They look like data
+# but identify nothing, so they must never be used as a lookup key.
+SERIAL_PLACEHOLDERS = {
+    'not available',
+    'not available (vm or unknown hardware)',
+    'to be filled by o.e.m.',
+    'to be filled',
+    'default string',
+    'not specified',
+    'system serial number',
+    'none',
+    'unknown',
+}
+
+VALID_ASSET_CLASSES = {'linux', 'macos', 'windows'}
+VALID_ASSET_STATUSES = {'active', 'retired'}
+
+
+def normalise_serial(raw):
+    """Return a usable hardware serial, or None when there is none.
+
+    A usable serial is a single token: non-empty, no whitespace, and not one of
+    the placeholder strings a client writes when it cannot read the hardware.
+    Everything else counts as absent - a missing serial is a state to report,
+    not a key to guess at.
+
+    Examples:
+        >>> normalise_serial(' pf50l2mr\\n')
+        'PF50L2MR'
+        >>> normalise_serial('\\ufeffMP1Y69AC')
+        'MP1Y69AC'
+        >>> normalise_serial('Not available') is None
+        True
+        >>> normalise_serial('Mac OS X\\t') is None
+        True
+        >>> normalise_serial('00000000') is None
+        True
+        >>> normalise_serial(None) is None
+        True
+    """
+    if raw is None:
+        return None
+
+    value = raw.replace('﻿', '').strip()
+    if not value:
+        return None
+
+    # A real serial is one token. The macOS client has been seen writing
+    # "Mac OS X\t", which is a fragment of unrelated output.
+    if len(value.split()) != 1:
+        return None
+
+    if value.lower() in SERIAL_PLACEHOLDERS:
+        return None
+
+    # All-zero serials are a BIOS default, not an identity.
+    if set(value) <= {'0'}:
+        return None
+
+    return value.upper()
+
+
+def parse_register_date(value, field, row_number):
+    """Parse an ISO date from the register, treating blank as open-ended."""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, '%Y-%m-%d').date()
+    except ValueError:
+        raise ValueError(
+            f"assets.csv row {row_number}: {field} '{value}' is not a YYYY-MM-DD date"
+        )
+
+
+class AssetRegisterError(Exception):
+    """Raised when the asset register cannot be trusted as a lookup key."""
+
+
+class AssetRegister:
+    """The set of assets in ISO scope, exported from the compliance sheet.
+
+    The register is the denominator: compliance is measured against the assets
+    that are expected to report, not against whatever happened to arrive.
+    `asset_id` is the durable identity; a serial is the key an incoming
+    submission is matched on, and one asset may have several over its life.
+    """
+
+    def __init__(self, csv_path=None):
+        self.csv_path = csv_path
+        self.rows = []
+        self.loaded = False
+
+    def load(self):
+        """Read and validate the register. Raises AssetRegisterError on faults.
+
+        Validation fails fast rather than degrading: a register that cannot be
+        trusted produces a compliance report that cannot be trusted either.
+        """
+        self.rows = []
+        self.loaded = False
+
+        if not self.csv_path:
+            logger.info("No asset register configured - round and fleet views unavailable")
+            return
+
+        path = Path(self.csv_path)
+        if not path.exists():
+            logger.warning(
+                f"Asset register not found at {path} - round and fleet views unavailable"
+            )
+            return
+
+        with open(path, newline='', encoding='utf-8-sig') as handle:
+            reader = csv.DictReader(handle)
+            required = {'asset_id', 'serial', 'owner', 'class'}
+            missing = required - set(reader.fieldnames or [])
+            if missing:
+                raise AssetRegisterError(
+                    f"assets.csv is missing required column(s): {', '.join(sorted(missing))}"
+                )
+
+            for offset, raw_row in enumerate(reader, start=2):
+                self.rows.append(self._parse_row(raw_row, offset))
+
+        self._check_serial_overlaps()
+
+        self.loaded = True
+        assets = {row['asset_id'] for row in self.rows}
+        active = {row['asset_id'] for row in self.rows if row['status'] == 'active'}
+        logger.info(
+            f"Asset register loaded: {len(self.rows)} row(s), "
+            f"{len(assets)} asset(s), {len(active)} active"
+        )
+
+    def _parse_row(self, raw_row, row_number):
+        def field(name):
+            return (raw_row.get(name) or '').strip()
+
+        asset_id = field('asset_id')
+        if not asset_id:
+            raise AssetRegisterError(f"assets.csv row {row_number}: asset_id is empty")
+
+        serial = normalise_serial(raw_row.get('serial'))
+        if not serial:
+            raise AssetRegisterError(
+                f"assets.csv row {row_number} ({asset_id}): "
+                f"serial '{field('serial')}' is empty or not a usable serial"
+            )
+
+        asset_class = field('class').lower()
+        if asset_class not in VALID_ASSET_CLASSES:
+            raise AssetRegisterError(
+                f"assets.csv row {row_number} ({asset_id}): unknown class '{asset_class}'. "
+                f"Expected one of {', '.join(sorted(VALID_ASSET_CLASSES))}"
+            )
+
+        status = (field('status') or 'active').lower()
+        if status not in VALID_ASSET_STATUSES:
+            raise AssetRegisterError(
+                f"assets.csv row {row_number} ({asset_id}): unknown status '{status}'. "
+                f"Expected one of {', '.join(sorted(VALID_ASSET_STATUSES))}"
+            )
+
+        try:
+            valid_from = parse_register_date(raw_row.get('valid_from'), 'valid_from', row_number)
+            valid_to = parse_register_date(raw_row.get('valid_to'), 'valid_to', row_number)
+            owner_since = parse_register_date(raw_row.get('owner_since'), 'owner_since', row_number)
+        except ValueError as exc:
+            raise AssetRegisterError(str(exc)) from exc
+
+        if valid_from and valid_to and valid_to < valid_from:
+            raise AssetRegisterError(
+                f"assets.csv row {row_number} ({asset_id}): valid_to precedes valid_from"
+            )
+
+        return {
+            'asset_id': asset_id,
+            'serial': serial,
+            'owner': field('owner'),
+            'model': field('model'),
+            'class': asset_class,
+            'status': status,
+            'owner_since': owner_since,
+            'valid_from': valid_from,
+            'valid_to': valid_to,
+            'departure_reason': field('departure_reason'),
+            'row_number': row_number,
+        }
+
+    def _check_serial_overlaps(self):
+        """One serial may appear more than once, but never for overlapping periods.
+
+        A serial that is valid for two assets at the same moment makes the
+        lookup ambiguous, which is worse than having no register at all.
+        """
+        by_serial = {}
+        for row in self.rows:
+            by_serial.setdefault(row['serial'], []).append(row)
+
+        for serial, rows in by_serial.items():
+            if len(rows) == 1:
+                continue
+            ordered = sorted(rows, key=lambda r: (r['valid_from'] or date.min))
+            for earlier, later in zip(ordered, ordered[1:]):
+                earlier_end = earlier['valid_to'] or date.max
+                later_start = later['valid_from'] or date.min
+                if later_start < earlier_end:
+                    raise AssetRegisterError(
+                        f"assets.csv: serial {serial} has overlapping validity in rows "
+                        f"{earlier['row_number']} and {later['row_number']} "
+                        f"({earlier['asset_id']} and {later['asset_id']})"
+                    )
+
+    def lookup(self, serial, on_date=None):
+        """Resolve a serial to the register row valid on the given date."""
+        if not serial:
+            return None
+        on_date = on_date or date.today()
+
+        candidates = [row for row in self.rows if row['serial'] == serial]
+        for row in candidates:
+            if row['valid_from'] and on_date < row['valid_from']:
+                continue
+            if row['valid_to'] and on_date >= row['valid_to']:
+                continue
+            return row
+
+        # Outside every validity window the serial is still known; returning the
+        # closest row keeps a historical submission attributable to its asset.
+        if candidates:
+            return sorted(candidates, key=lambda r: (r['valid_from'] or date.min))[-1]
+        return None
+
+    def in_scope(self, window_start, window_end):
+        """Active rows whose validity window overlaps the given scan window.
+
+        Scope is computed from recorded dates rather than from a snapshot, so a
+        device replaced mid-round is in scope and a closed round stays
+        reproducible after the register moves on.
+        """
+        result = []
+        for row in self.rows:
+            if row['status'] != 'active':
+                continue
+            starts = row['valid_from'] or date.min
+            ends = row['valid_to'] or date.max
+            if starts <= window_end and ends >= window_start:
+                result.append(row)
+        return result
+
+    def retired(self):
+        """Rows excluded from the denominator but kept visible with their history."""
+        return [row for row in self.rows if row['status'] == 'retired']
 
 
 class Config:
@@ -431,6 +776,14 @@ class Config:
                 self.required_reports_mandatory = required_reports.get('mandatory', ['fastfetch', 'lynis'])
                 self.required_reports_one_of = required_reports.get('one_of', ['trivy', 'vulnix'])
 
+                # Asset register: the denominator compliance is measured against
+                self.asset_register_path = compliance.get('asset_register')
+
+                # Weeks past the audit month during which a submission still
+                # counts toward the round, and during which an asset entering
+                # scope still belongs to it. One value, both boundaries.
+                self.grace_weeks = compliance.get('grace_weeks', 4)
+
                 # Validate audit months
                 if self.compliance_enabled:
                     if not self.audit_months:
@@ -438,6 +791,11 @@ class Config:
                     for month in self.audit_months:
                         if not isinstance(month, int) or month < 1 or month > 12:
                             raise ValueError(f"Invalid audit month '{month}'. Must be integer between 1 and 12")
+                    if not isinstance(self.grace_weeks, int) or self.grace_weeks < 0:
+                        raise ValueError(
+                            f"Invalid compliance.grace_weeks '{self.grace_weeks}'. "
+                            "Must be a non-negative integer"
+                        )
 
                 logger.info(f"Configuration loaded from {self.config_file}")
                 logger.info(f"Network port: {self.networkport}")
@@ -445,7 +803,9 @@ class Config:
                 logger.info(f"Compliance mode: {self.compliance_enabled}")
                 if self.compliance_enabled:
                     logger.info(f"Audit months: {self.audit_months}")
+                    logger.info(f"Grace period: {self.grace_weeks} week(s)")
                     logger.info(f"Required reports: {self.required_reports_mandatory} + one of {self.required_reports_one_of}")
+                    logger.info(f"Asset register: {self.asset_register_path or 'not configured'}")
         except FileNotFoundError:
             logger.error(f"Config file {self.config_file} not found")
             raise
@@ -463,6 +823,7 @@ class ReportHandler(BaseHTTPRequestHandler):
     config = None
     start_time = None
     compliance_cache = None
+    asset_register = None
 
     def log_message(self, format, *args):
         """Override to use custom logger"""
@@ -2107,6 +2468,18 @@ def run_server(config):
 
     # Create storage directory if it doesn't exist
     Path(config.storage_location).mkdir(parents=True, exist_ok=True)
+
+    # Load the asset register. A register that cannot be trusted is a hard stop:
+    # it is the denominator of every compliance figure the server reports.
+    # An absent register is not - the server still accepts submissions, it just
+    # cannot say who is missing.
+    register = AssetRegister(config.asset_register_path if config.compliance_enabled else None)
+    try:
+        register.load()
+    except AssetRegisterError as exc:
+        logger.error(f"Asset register is invalid: {exc}")
+        raise
+    ReportHandler.asset_register = register
 
     # Initialize and build compliance cache
     cache = ComplianceCache(config)

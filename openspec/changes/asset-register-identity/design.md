@@ -30,6 +30,51 @@ A submission whose serial is not in the register is stored under
 accepted. That is a feature: it catches a new asset, an out-of-scope department,
 or a register error.
 
+### A serial is often missing, and that is a state, not an error
+
+Measured across all 22 archives on compute2-prod: five systems carry a usable
+serial, and the rest do not.
+
+    FRANMDCPA750850030  lego2-pim                  usable
+    PF50L2MR            lobos-wtoorren             usable
+    FRANDGCPA5530200H9  Jeroen-jeroen              usable
+    PF50L2ML            mathijs-p16s-mathijs       usable
+    MP1Y69AC            pankhuri-... (3 archives)  usable
+
+    Not available       SammyMBPro-Sammy
+    Not available       technative-casper-casper   (4 archives)
+    Not available       nixos-pankhurip            (4 archives)
+    "Mac OS X<TAB>"     MBP-van-pim-pim
+
+`dmidecode -s system-serial-number` needs root; without it the Linux client
+writes the literal string `Not available` (bean wtoorren-m6ho). The macOS client
+writes a fragment of unrelated output (bean wtoorren-5qvb). A virtual machine
+may legitimately have no serial at all.
+
+So the system must be designed for a missing serial rather than assuming one.
+A submission without a usable serial is stored, surfaced, and counted as a
+problem to fix — never discarded and never silently attributed.
+
+**A usable serial** is a single non-empty token containing no whitespace and
+matching no known placeholder (`Not available`, `Not available (VM or unknown
+hardware)`, `To Be Filled`, `O.E.M.`, `Default string`, `System Serial Number`,
+all-zeroes). Everything else counts as absent.
+
+### Two ways a submission fails to resolve, and they need different fixes
+
+    no_serial                 the archive carries no usable serial
+                              -> a client problem: the audit ran without root,
+                                 or the platform writes the wrong field
+
+    serial_not_in_register    a usable serial that the register does not know
+                              -> a register problem: a new asset, an
+                                 out-of-scope department, or a wrong column D
+
+Both land in `reports/unmatched/<hostname>-<username>/<timestamp>/` — one tree,
+not two — and the record carries which of the two it was. The dashboard keeps
+them apart, because telling someone to fix their spreadsheet when their laptop
+never reported a serial wastes everyone's time.
+
 ### The register is not yet clean
 
 Before the serial can be trusted as a join key, column D of
@@ -38,6 +83,11 @@ Before the serial can be trusted as a join key, column D of
 | Asset      | Owner     | Register says | Client measures |
 |------------|-----------|---------------|-----------------|
 | TARI-00031 | Elma Aker | `AC06CMEP`    | `YD063JGA`      |
+
+Pankhuri Prakash measured `MP1Y69AC` where the register holds `PF3NFHJL`. That
+one is not an error: the asset was replaced. It is the case the multi-serial
+design exists for — two rows under one `asset_id`, each with its own validity
+window, and a continuous history across the swap.
 
 `AC06CMEP` is the random suffix of the Windows hostname `LAPTOP-AC06CMEP`, not a
 BIOS serial — most likely transcribed from the neofetch banner. `TARI-00034`

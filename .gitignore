@@ -31,3 +31,6 @@ reports/*
 # Credentials (generate locally, see README)
 tokens.yaml
 password.txt
+
+# Asset register (contains names + serials; delivered via agenix in production)
+assets.csv

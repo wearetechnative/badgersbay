@@ -47,16 +47,43 @@ tar archive and resolve it against the asset register.
 
 #### Scenario: Serial unreadable
 - **WHEN** a tar contains no `hardware-serial.txt` or the file is empty
-- **THEN** the submission is stored as unmatched and is never rejected
+- **THEN** the submission is stored as unmatched with reason `no_serial` and is
+  never rejected
+
+#### Scenario: Placeholder serial
+- **WHEN** the serial file holds a known placeholder such as `Not available`,
+  `Not available (VM or unknown hardware)`, `To Be Filled`, `Default string` or
+  all zeroes
+- **THEN** it is treated as absent, not as a lookup key
+
+#### Scenario: Malformed serial
+- **WHEN** the serial value contains whitespace, as the macOS client's
+  `Mac OS X` output does
+- **THEN** it is treated as absent rather than used as a key
 
 ### Requirement: Report unmatched submissions
 
-The system SHALL surface submissions that do not resolve to a register entry.
+The system SHALL surface submissions that do not resolve to a register entry,
+distinguishing a missing serial from a serial the register does not know.
 
 #### Scenario: Unmatched submissions present
 - **WHEN** one or more submissions in the open round are unmatched
 - **THEN** the dashboard shows a warning block listing them with hostname,
   username, serial and upload time
+
+#### Scenario: Reason recorded per submission
+- **WHEN** a submission does not resolve
+- **THEN** the record carries `no_serial` or `serial_not_in_register`
+
+#### Scenario: Reasons reported separately
+- **WHEN** the dashboard lists unmatched submissions
+- **THEN** it groups them by reason, because a missing serial is a client
+  problem and an unknown serial is a register problem
+
+#### Scenario: Submission is never discarded
+- **WHEN** a submission cannot be resolved for any reason
+- **THEN** the archive and its extracted reports are stored, and the upload
+  returns success
 
 ### Requirement: Asset identity and serial lookup
 
