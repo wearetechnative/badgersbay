@@ -144,7 +144,132 @@ class ComplianceCache:
         """Initialize cache with config"""
         self.config = config
         self.data = {}  # { "YYYY-MM": { "hostname-username": {...} } }
+        self.submissions = []  # one entry per submission, never collapsed
         self.last_updated = None
+
+    def _scan_submissions(self, storage_path):
+        """Read every submission record into a flat, uncollapsed list.
+
+        Three trees are read. Records written under a hardware serial and
+        records that could not be matched both carry a `submission.json`.
+        The period directories are the layout used before submissions were
+        keyed on serial: they are read as archive records without a serial, so
+        that switching layout does not empty a round that is already running.
+        """
+        for source, base in (('submissions', storage_path / 'submissions'),
+                             ('unmatched', storage_path / 'unmatched')):
+            if not base.is_dir():
+                continue
+            for key_dir in base.iterdir():
+                if not key_dir.is_dir():
+                    continue
+                for record_dir in key_dir.iterdir():
+                    record = self._read_record(record_dir, source)
+                    if record:
+                        self.submissions.append(record)
+
+        for period_dir in storage_path.iterdir():
+            if not period_dir.is_dir() or not is_audit_period_dirname(period_dir.name):
+                continue
+            for system_dir in period_dir.iterdir():
+                if not system_dir.is_dir():
+                    continue
+                self.submissions.append(self._read_archive_record(system_dir, period_dir.name))
+
+    def _read_record(self, record_dir, source):
+        """Load one submission record written under the serial-keyed layout."""
+        meta_path = record_dir / 'submission.json'
+        if not meta_path.is_file():
+            return None
+        try:
+            with open(meta_path) as handle:
+                metadata = json.load(handle)
+        except Exception as e:
+            logger.warning(f"Could not read {meta_path}: {e}")
+            return None
+
+        metadata['source'] = source
+        metadata['record_dir'] = str(record_dir)
+        try:
+            metadata['submitted_at_dt'] = datetime.fromisoformat(metadata['submitted_at'])
+        except Exception:
+            metadata['submitted_at_dt'] = datetime.fromtimestamp(record_dir.stat().st_mtime)
+        return metadata
+
+    def _read_archive_record(self, system_dir, audit_period):
+        """Describe a pre-serial directory as a submission without an asset.
+
+        These records carry no hardware serial, so they cannot be attributed to
+        a register entry. They are kept visible rather than dropped: the round
+        they belong to is closed history, and its evidence is the stored tar.
+        """
+        reports = []
+        newest = None
+        for report_file in system_dir.glob('*.json'):
+            name = report_file.stem.replace('-report', '')
+            if name != 'submission':
+                reports.append(name)
+            stamp = datetime.fromtimestamp(report_file.stat().st_mtime)
+            newest = stamp if newest is None or stamp > newest else newest
+        for tar_file in system_dir.glob('*.tar.gz'):
+            stamp = datetime.fromtimestamp(tar_file.stat().st_mtime)
+            newest = stamp if newest is None or stamp > newest else newest
+
+        hostname, _, username = system_dir.name.rpartition('-')
+        return {
+            'schema_version': 0,
+            'source': 'archive',
+            'record_dir': str(system_dir),
+            'submitted_at': (newest or datetime.now()).isoformat(),
+            'submitted_at_dt': newest or datetime.now(),
+            'audit_period': audit_period,
+            'timeliness': None,
+            'serial': None,
+            'hostname': hostname or system_dir.name,
+            'username': username,
+            'os_type': self._archive_os_type(system_dir),
+            'asset_id': None,
+            'owner': None,
+            'class': None,
+            'unmatched_reason': 'no_serial',
+            'evidence_predates_owner': False,
+            'reports': sorted(set(reports)),
+            'evidence': None,
+        }
+
+    @staticmethod
+    def _archive_os_type(system_dir):
+        fastfetch = system_dir / 'fastfetch-report.json'
+        if not fastfetch.is_file():
+            return 'unknown'
+        try:
+            with open(fastfetch) as handle:
+                return json.load(handle).get('os', 'unknown')
+        except Exception:
+            return 'unknown'
+
+    def submissions_in_period(self, audit_period):
+        """Every submission belonging to a round, uncollapsed."""
+        return [s for s in self.submissions if s.get('audit_period') == audit_period]
+
+    def latest_by_asset(self):
+        """The most recent submission per asset_id, across all rounds."""
+        latest = {}
+        for record in self.submissions:
+            asset_id = record.get('asset_id')
+            if not asset_id:
+                continue
+            current = latest.get(asset_id)
+            if current is None or record['submitted_at_dt'] > current['submitted_at_dt']:
+                latest[asset_id] = record
+        return latest
+
+    def unmatched(self, audit_period=None):
+        """Submissions that could not be attributed, newest first."""
+        records = [s for s in self.submissions if s.get('unmatched_reason')]
+        if audit_period:
+            records = [s for s in records if s.get('audit_period') == audit_period]
+        return sorted(records, key=lambda r: r['submitted_at_dt'], reverse=True)
 
     def rebuild(self):
         """Scan filesystem and rebuild compliance cache"""
@@ -154,12 +279,15 @@ class ComplianceCache:
 
         logger.info("Rebuilding compliance cache...")
         self.data = {}
+        self.submissions = []
         storage_path = Path(self.config.storage_location)
 
         if not storage_path.exists():
             logger.warning(f"Storage location does not exist: {storage_path}")
             self.last_updated = datetime.now()
             return
+
+        self._scan_submissions(storage_path)
 
         # Scan all audit period directories
         for period_dir in storage_path.iterdir():
@@ -509,6 +637,12 @@ SERIAL_PLACEHOLDERS = {
 
 VALID_ASSET_CLASSES = {'linux', 'macos', 'windows'}
 VALID_ASSET_STATUSES = {'active', 'retired'}
+
+# Where each recognised report type is written inside a submission record.
+REPORT_FILENAMES = {
+    'fastfetch': 'fastfetch-report.json',
+    'lynis': 'lynis-report.json',
+}
 
 
 def normalise_serial(raw):
@@ -1144,8 +1278,30 @@ class ReportHandler(BaseHTTPRequestHandler):
                         'reason': f"Error extracting file: {str(e)}"
                     })
 
+            # The hardware serial identifies the asset. It is not a report, so
+            # it is read separately and never appears in 'reports'.
+            serial = None
+            for member in members:
+                if not member.isfile():
+                    continue
+                if os.path.basename(member.name).lower() != 'hardware-serial.txt':
+                    continue
+                valid, error_msg = self.validate_tar_member_path(member)
+                if not valid:
+                    break
+                try:
+                    handle = tar.extractfile(member)
+                    serial = normalise_serial(handle.read().decode('utf-8', errors='replace'))
+                except Exception as e:
+                    logger.warning(f"Could not read hardware serial from archive: {e}")
+                break
+
             tar.close()
-            return True, {'reports': results, 'unrecognised': unrecognised}
+            return True, {
+                'reports': results,
+                'unrecognised': unrecognised,
+                'serial': serial,
+            }
 
         except Exception as e:
             tar.close()
@@ -1368,6 +1524,7 @@ class ReportHandler(BaseHTTPRequestHandler):
 
             extracted_reports = extraction['reports']
             unrecognised = extraction['unrecognised']
+            serial = extraction['serial']
 
             # OS type comes from the archive's fastfetch report; the X-OS-Type
             # header is only a fallback for archives without one
@@ -1378,71 +1535,42 @@ class ReportHandler(BaseHTTPRequestHandler):
                     logger.info(f"Extracted OS type from fastfetch data: {os_type}")
                     break
 
-            # Determine storage path based on compliance mode
             if self.config.compliance_enabled:
-                # Calculate audit period
-                upload_date = datetime.now()
-                audit_period = get_audit_period(upload_date, self.config.audit_months)
-
-                # Create directory path: {audit-period}/{hostname-username}/
-                dir_name = f"{hostname}-{username}"
-                dir_path = Path(self.config.storage_location) / audit_period / dir_name
+                record_dir, metadata, saved_reports = self.store_submission(
+                    hostname, username, serial, tar_data, extracted_reports, os_type
+                )
+                tar_path = record_dir / metadata['evidence']
+                audit_period = metadata['audit_period']
             else:
-                # Legacy mode: {hostname-username-YYYYMMDD}/
+                # Legacy mode keeps its flat date-named directories untouched.
                 date_str = datetime.now().strftime('%Y%m%d')
-                dir_name = f"{hostname}-{username}-{date_str}"
-                dir_path = Path(self.config.storage_location) / dir_name
-
-            # Create directory if it doesn't exist
-            dir_path.mkdir(parents=True, exist_ok=True)
-
-            # Save tar file with timestamp to allow multiple uploads
-            timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-            tar_filename = f"honeybadger-{timestamp}.tar.gz"
-            tar_path = dir_path / tar_filename
-
-            # Write tar data to file
-            with open(tar_path, 'wb') as f:
-                f.write(tar_data)
-
-            logger.info(f"Tar file saved: {tar_path} ({content_length} bytes)")
-
-            # Save each recognised report alongside the stored archive
-            saved_reports = []
-            for member_name, report_type, data in extracted_reports:
-                try:
+                dir_path = Path(self.config.storage_location) / f"{hostname}-{username}-{date_str}"
+                dir_path.mkdir(parents=True, exist_ok=True)
+                tar_path = dir_path / f"honeybadger-{datetime.now().strftime('%Y%m%d-%H%M%S')}.tar.gz"
+                with open(tar_path, 'wb') as f:
+                    f.write(tar_data)
+                saved_reports = []
+                for member_name, report_type, data in extracted_reports:
                     saved_path, _ = self.save_report(hostname, username, report_type, data, os_type)
                     saved_reports.append({
                         'file': member_name,
                         'report_type': report_type,
-                        'path': str(saved_path)
+                        'path': str(saved_path),
                     })
-                    logger.info(f"Report saved from archive: {saved_path}")
-                except Exception as e:
-                    logger.error(f"Could not save {report_type} report from {member_name}: {e}")
-                    unrecognised.append({
-                        'file': member_name,
-                        'reason': f"Could not save report: {str(e)}"
-                    })
+                metadata = {'unmatched_reason': None, 'asset_id': None, 'timeliness': None}
+                audit_period = None
 
-            # Update compliance cache if enabled
+            logger.info(f"Tar archive stored: {tar_path} ({content_length} bytes)")
+
             if self.config.compliance_enabled and self.compliance_cache:
-                # Record the archive itself, plus every report extracted from it
-                self.compliance_cache.update_system(
-                    audit_period, hostname, username, 'tar', os_type
-                )
-                for entry in saved_reports:
-                    self.compliance_cache.update_system(
-                        audit_period, hostname, username, entry['report_type'], os_type
-                    )
-                logger.info(
-                    f"Cache updated: {audit_period}/{hostname}-{username} with tar report "
-                    f"and {len(saved_reports)} extracted report(s)"
-                )
+                self.compliance_cache.rebuild()
 
-            # 200 when every JSON member was recognised and stored; 207 when
-            # some were not, or when the archive yielded no reports at all
-            status_code = 200 if (saved_reports and not unrecognised) else 207
+            # 200 when every JSON member was recognised and the submission
+            # resolved to an asset; 207 when something needs attention but the
+            # evidence is stored either way.
+            needs_attention = bool(unrecognised) or not saved_reports \
+                or bool(metadata.get('unmatched_reason'))
+            status_code = 207 if needs_attention else 200
 
             self.send_response(status_code)
             self.send_header('Content-Type', 'application/json')
@@ -1450,10 +1578,15 @@ class ReportHandler(BaseHTTPRequestHandler):
 
             response = {
                 'status': 'success' if status_code == 200 else 'partial',
-                'message': f"Tar archive saved successfully",
+                'message': 'Submission stored',
                 'path': str(tar_path),
                 'size': content_length,
                 'os_type': os_type,
+                'serial': serial,
+                'asset_id': metadata.get('asset_id'),
+                'audit_period': audit_period,
+                'timeliness': metadata.get('timeliness'),
+                'unmatched_reason': metadata.get('unmatched_reason'),
                 'reports_saved': saved_reports,
                 'unrecognised': unrecognised
             }
@@ -1463,6 +1596,116 @@ class ReportHandler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.error(f"Error saving tar submission: {e}", exc_info=True)
             self.send_error(500, f"Internal server error: {str(e)}")
+
+    def resolve_submission(self, serial, submitted_at):
+        """Match a submission to a register entry.
+
+        Returns (entry_or_None, unmatched_reason_or_None). The two ways a
+        submission fails to resolve need different fixes and are kept apart:
+        a missing serial is a client problem, an unknown serial is a register
+        problem.
+        """
+        if not serial:
+            return None, 'no_serial'
+
+        register = self.asset_register
+        if not register or not register.loaded:
+            # Without a register nothing can be matched, but the submission is
+            # not the thing at fault - record it as unknown and move on.
+            return None, 'serial_not_in_register'
+
+        entry = register.lookup(serial, submitted_at.date())
+        if entry is None:
+            return None, 'serial_not_in_register'
+        return entry, None
+
+    def store_submission(self, hostname, username, serial, tar_data,
+                         extracted_reports, os_type, submitted_at=None):
+        """Write one submission as its own timestamped record.
+
+        A submission is the unit: one upload, one moment, stored under the
+        hardware serial that identifies the asset. Records are never
+        overwritten, so two scans of the same machine in one round both
+        survive, and the audit period is computed from the timestamp rather
+        than baked into the path.
+
+        Returns (record_dir, metadata).
+        """
+        submitted_at = submitted_at or datetime.now()
+        entry, unmatched_reason = self.resolve_submission(serial, submitted_at)
+
+        period, timeliness = classify_submission(
+            submitted_at, self.config.audit_months, self.config.grace_weeks
+        )
+
+        storage = Path(self.config.storage_location)
+        if entry is not None:
+            base = storage / 'submissions' / serial
+        else:
+            base = storage / 'unmatched' / f"{hostname}-{username}"
+
+        stamp = submitted_at.strftime('%Y-%m-%dT%H-%M-%S')
+        record_dir = base / stamp
+        suffix = 1
+        while record_dir.exists():
+            suffix += 1
+            record_dir = base / f"{stamp}-{suffix}"
+        record_dir.mkdir(parents=True, exist_ok=False)
+
+        tar_name = f"honeybadger-{submitted_at.strftime('%Y%m%d-%H%M%S')}.tar.gz"
+        with open(record_dir / tar_name, 'wb') as handle:
+            handle.write(tar_data)
+
+        saved_reports = []
+        for member_name, report_type, data in extracted_reports:
+            filename = REPORT_FILENAMES.get(report_type, f'{report_type}-report.json')
+            with open(record_dir / filename, 'w') as handle:
+                json.dump(data, handle, indent=2)
+            saved_reports.append({
+                'file': member_name,
+                'report_type': report_type,
+                'path': str(record_dir / filename),
+            })
+
+        # Register state is written into the record rather than joined at read
+        # time. The register moves - owners change, devices are replaced - and a
+        # closed round must keep reporting what was true when it was scanned.
+        evidence_predates_owner = False
+        if entry and entry.get('owner_since'):
+            evidence_predates_owner = submitted_at.date() < entry['owner_since']
+
+        metadata = {
+            'schema_version': 1,
+            'submitted_at': submitted_at.isoformat(),
+            'audit_period': period,
+            'timeliness': timeliness,
+            'serial': serial,
+            'hostname': hostname,
+            'username': username,
+            'os_type': os_type,
+            'asset_id': entry['asset_id'] if entry else None,
+            'owner': entry['owner'] if entry else None,
+            'class': entry['class'] if entry else None,
+            'unmatched_reason': unmatched_reason,
+            'evidence_predates_owner': evidence_predates_owner,
+            'reports': sorted({r['report_type'] for r in saved_reports}),
+            'evidence': tar_name,
+        }
+        with open(record_dir / 'submission.json', 'w') as handle:
+            json.dump(metadata, handle, indent=2)
+
+        if unmatched_reason:
+            logger.warning(
+                f"Submission stored as unmatched ({unmatched_reason}): "
+                f"{hostname}-{username} serial={serial or '-'} -> {record_dir}"
+            )
+        else:
+            logger.info(
+                f"Submission stored: {metadata['asset_id']} ({serial}) "
+                f"period {period}, {timeliness} -> {record_dir}"
+            )
+
+        return record_dir, metadata, saved_reports
 
     def save_report(self, hostname, username, report_type, data, os_type='unknown'):
         """Save report to disk with appropriate filename

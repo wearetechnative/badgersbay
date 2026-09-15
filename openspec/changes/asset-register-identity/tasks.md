@@ -14,26 +14,26 @@
 
 ## 2. Serial as identity
 
-- [ ] 2.1 Read `hardware-serial.txt` from the submitted tar
-- [ ] 2.2 Normalise (trim, strip BOM, uppercase) before lookup
-- [ ] 2.3 Resolve serial to register entry; unmatched submissions go to
+- [x] 2.1 Read `hardware-serial.txt` from the submitted tar
+- [x] 2.2 Normalise (trim, strip BOM, uppercase) before lookup
+- [x] 2.3 Resolve serial to register entry; unmatched submissions go to
       `reports/unmatched/<hostname>-<username>/<timestamp>/`
-- [ ] 2.4 Submissions without a readable serial are treated as unmatched, not
+- [x] 2.4 Submissions without a readable serial are treated as unmatched, not
       rejected — never lose an upload
 - [x] 2.5 A usable serial is one non-empty token, no whitespace, matching no
       known placeholder (`Not available`, `Not available (VM or unknown
       hardware)`, `To Be Filled`, `O.E.M.`, `Default string`,
       `System Serial Number`, all zeroes)
-- [ ] 2.6 Record `unmatched_reason`: `no_serial` or `serial_not_in_register`
+- [x] 2.6 Record `unmatched_reason`: `no_serial` or `serial_not_in_register`
 - [x] 2.7 Unit tests over the real values found on compute2: `PF50L2MR`,
       `MP1Y69AC`, `Not available`, `Mac OS X<TAB>`, empty, absent
 
 ## 3. Storage layout
 
-- [ ] 3.1 Write to `reports/submissions/<serial>/<timestamp>/`
-- [ ] 3.2 Store the tar alongside the extracted reports
-- [ ] 3.3 Never overwrite an existing timestamped record
-- [ ] 3.4 Leave `reports/2026-03/` untouched and unwritten
+- [x] 3.1 Write to `reports/submissions/<serial>/<timestamp>/`
+- [x] 3.2 Store the tar alongside the extracted reports
+- [x] 3.3 Never overwrite an existing timestamped record
+- [x] 3.4 Leave `reports/2026-03/` untouched and unwritten
 
 ## 4. Audit period
 
@@ -42,7 +42,7 @@
 - [x] 4.2 Classify each submission `on_time` or `late` relative to its round
 - [x] 4.5 `grace_weeks` config value defines both the on_time/late boundary and
       the scan window used for scope membership
-- [ ] 4.3 Remove audit period from all filesystem paths
+- [x] 4.3 Remove audit period from all filesystem paths
 - [x] 4.4 Doctests covering 2026-09-15, 2026-10-02, 2026-04-10, 2026-02-10
 
 ## 5. Completeness per class
@@ -53,9 +53,9 @@
 
 ## 6. Index
 
-- [ ] 6.1 Rebuild the cache from `reports/submissions/` keyed on serial
-- [ ] 6.2 Keep one record per submission with its timestamp; no collapsing
-- [ ] 6.3 Read existing period directories (`reports/YYYY-MM/`) as archive
+- [x] 6.1 Rebuild the cache from `reports/submissions/` keyed on serial
+- [x] 6.2 Keep one record per submission with its timestamp; no collapsing
+- [x] 6.3 Read existing period directories (`reports/YYYY-MM/`) as archive
       records without serials — including `2026-09`, which holds the round that
       is running, so switching layout does not empty the round view
 
@@ -88,7 +88,7 @@
 
 - [ ] 11.1 Scope membership from `valid_from`/`valid_to` overlapping the round's
       scan window; no snapshot file
-- [ ] 11.2 Write `asset_id`, `owner` and `class` into each submission record at
+- [x] 11.2 Write `asset_id`, `owner` and `class` into each submission record at
       storage time; never join them at read time
 - [ ] 11.3 Retired assets listed separately in the round view, excluded from the
       denominator
@@ -99,7 +99,7 @@
       unexplained rather than subtracted from the denominator
 - [ ] 11.8 An asset that left scope unscanned counts as accounted for, never as
       scanned
-- [ ] 11.5 Flag a submission whose `scanned_at` predates the asset's
+- [x] 11.5 Flag a submission whose `scanned_at` predates the asset's
       `owner_since` as evidence predating the current holder
 - [ ] 11.6 Doctests: retirement mid-round, transfer mid-round, serial change,
       asset added mid-round
