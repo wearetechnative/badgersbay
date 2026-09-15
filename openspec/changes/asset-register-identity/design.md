@@ -47,8 +47,8 @@ serial, and the rest do not.
     "Mac OS X<TAB>"     MBP-van-pim-pim
 
 `dmidecode -s system-serial-number` needs root; without it the Linux client
-writes the literal string `Not available` (bean wtoorren-m6ho). The macOS client
-writes a fragment of unrelated output (bean wtoorren-5qvb). A virtual machine
+writes the literal string `Not available` (bean honeybadger-wgct). The macOS client
+writes a fragment of unrelated output (bean honeybadger-nt8k). A virtual machine
 may legitimately have no serial at all.
 
 So the system must be designed for a missing serial rather than assuming one.
@@ -160,7 +160,7 @@ name was used as a requirement name, and it broke again the moment a platform
 arrived with a different tool.
 
 Windows cannot satisfy this yet — `AUDIT.ps1` writes ASCII art rather than
-`fastfetch.json`, and does not submit at all. Until `wtoorren-cikq` lands, those
+`fastfetch.json`, and does not submit at all. Until `honeybadger-k80g` lands, those
 two assets are reported as `manual` rather than as incomplete.
 
 ## Decision: two views, one index
@@ -183,7 +183,7 @@ No Grafana. Both views are rendered by the server.
 `honeybadger_server.py` is 2186 lines. `CLAUDE.md` still describes it as 837 and
 lists "adding an authentication system" and "adding a database backend" as
 triggers to split the file; the first has already happened and the second is
-queued as `wtoorren-634y`. This change adds a register loader and a second
+queued as `badgersbay-8ylz`. This change adds a register loader and a second
 dashboard view. The single-file principle has effectively expired and should be
 retired deliberately here rather than eroded further in silence.
 

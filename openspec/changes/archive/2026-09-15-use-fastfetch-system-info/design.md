@@ -12,7 +12,7 @@ Three naming layers are in play:
 branches at line 53 only for platform-specific collection elsewhere), so the
 current client emits `fastfetch.json` on both. Windows (`AUDIT.ps1:135`) still
 runs neofetch and writes ASCII art, which was never parseable and is out of
-scope here — see bean `wtoorren-cikq`.
+scope here — see bean `honeybadger-k80g`.
 
 ## Decision: finish the extraction before renaming anything
 

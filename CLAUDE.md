@@ -397,7 +397,7 @@ original triggers below have already fired.
 The original triggers, for the record:
 - Adding >2 new report types
 - Adding authentication system          (done - version 1.1.0)
-- Adding database backend               (queued - bean wtoorren-634y)
+- Adding database backend               (queued - bean badgersbay-8ylz)
 - Adding API versioning
 - Team size > 2 developers
 

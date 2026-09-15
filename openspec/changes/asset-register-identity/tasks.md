@@ -49,7 +49,7 @@
 
 - [x] 5.1 Rename report types to `sysinfo` and `hardening`
 - [x] 5.2 Per-class requirement table in config
-- [x] 5.3 Windows assets report `manual` until `wtoorren-cikq` lands
+- [x] 5.3 Windows assets report `manual` until `honeybadger-k80g` lands
 
 ## 6. Index
 

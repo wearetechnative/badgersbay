@@ -67,7 +67,7 @@ files in the archive.
   archive of the closed spring round. New submissions use the new tree.
 - **Clients are unaffected.** No client change is required: the serial is
   already in every tar. Windows is the exception and is tracked separately
-  (bean `wtoorren-cikq`).
+  (bean `honeybadger-k80g`).
 - **The register must be clean before it can be a key.** Column D of the
   reporting sheet is known to be wrong for at least one asset — see design.
 - **Prerequisite**: `use-fastfetch-system-info`.
@@ -78,4 +78,4 @@ files in the archive.
   hardening score) from submissions. That needs a machine-readable summary from
   the client; see the honeybadger change `emit-asset-inventory-json`. This
   change establishes identity and the register, which that work depends on.
-- Moving the index into PostgreSQL. See bean `wtoorren-634y`.
+- Moving the index into PostgreSQL. See bean `badgersbay-8ylz`.
