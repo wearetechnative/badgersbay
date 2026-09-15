@@ -47,9 +47,9 @@
 
 ## 5. Completeness per class
 
-- [ ] 5.1 Rename report types to `sysinfo` and `hardening`
-- [ ] 5.2 Per-class requirement table in config
-- [ ] 5.3 Windows assets report `manual` until `wtoorren-cikq` lands
+- [x] 5.1 Rename report types to `sysinfo` and `hardening`
+- [x] 5.2 Per-class requirement table in config
+- [x] 5.3 Windows assets report `manual` until `wtoorren-cikq` lands
 
 ## 6. Index
 
@@ -86,20 +86,20 @@
 
 ## 11. Register lifecycle
 
-- [ ] 11.1 Scope membership from `valid_from`/`valid_to` overlapping the round's
+- [x] 11.1 Scope membership from `valid_from`/`valid_to` overlapping the round's
       scan window; no snapshot file
 - [x] 11.2 Write `asset_id`, `owner` and `class` into each submission record at
       storage time; never join them at read time
-- [ ] 11.3 Retired assets listed separately in the round view, excluded from the
+- [x] 11.3 Retired assets listed separately in the round view, excluded from the
       denominator
-- [ ] 11.4 Assets entering scope inside the scan window count for that round;
+- [x] 11.4 Assets entering scope inside the scan window count for that round;
       assets entering after it roll to the next and show in the fleet view as
       never audited
-- [ ] 11.7 `valid_to` carries a reason; a departure without one is reported as
+- [x] 11.7 `valid_to` carries a reason; a departure without one is reported as
       unexplained rather than subtracted from the denominator
-- [ ] 11.8 An asset that left scope unscanned counts as accounted for, never as
+- [x] 11.8 An asset that left scope unscanned counts as accounted for, never as
       scanned
 - [x] 11.5 Flag a submission whose `scanned_at` predates the asset's
       `owner_since` as evidence predating the current holder
-- [ ] 11.6 Doctests: retirement mid-round, transfer mid-round, serial change,
+- [x] 11.6 Doctests: retirement mid-round, transfer mid-round, serial change,
       asset added mid-round

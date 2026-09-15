@@ -644,6 +644,140 @@ REPORT_FILENAMES = {
     'lynis': 'lynis-report.json',
 }
 
+# What a complete submission requires, named after the requirement rather than
+# the tool that satisfies it. Naming a requirement after a tool is what broke
+# the previous model: the client moved from neofetch to fastfetch and the
+# requirement went with it, and Windows arrives with a different hardening tool
+# again. Requirements are stable; the tools behind them are not.
+REQUIREMENT_SATISFIED_BY = {
+    'linux': {'sysinfo': ('fastfetch',), 'hardening': ('lynis',)},
+    'macos': {'sysinfo': ('fastfetch',), 'hardening': ('lynis',)},
+    'windows': {'sysinfo': ('fastfetch',), 'hardening': ('hardeningkitty',)},
+}
+
+# Classes whose client cannot submit yet. Their assets are reported as manual
+# rather than incomplete: a permanent red row for a reason the owner cannot act
+# on is the fastest way to teach people to ignore a dashboard. See bean
+# wtoorren-cikq.
+MANUAL_CLASSES = {'windows'}
+
+
+def requirements_for_class(asset_class, overrides=None):
+    """Requirements for a platform class, with config taking precedence."""
+    table = dict(REQUIREMENT_SATISFIED_BY)
+    for name, mapping in (overrides or {}).items():
+        table[name] = {req: tuple(accepted) for req, accepted in mapping.items()}
+    return table.get(asset_class, table.get('linux'))
+
+
+def evaluate_completeness(asset_class, reports, overrides=None):
+    """Return (is_complete, missing) for a set of arrived report types.
+
+    Examples:
+        >>> evaluate_completeness('linux', ['fastfetch', 'lynis'])
+        (True, [])
+        >>> evaluate_completeness('linux', ['fastfetch'])
+        (False, ['hardening'])
+        >>> evaluate_completeness('windows', ['fastfetch', 'lynis'])
+        (False, ['hardening'])
+        >>> evaluate_completeness('windows', ['fastfetch', 'hardeningkitty'])
+        (True, [])
+    """
+    requirements = requirements_for_class(asset_class, overrides)
+    arrived = set(reports or ())
+    missing = [
+        requirement
+        for requirement, accepted in sorted(requirements.items())
+        if not arrived.intersection(accepted)
+    ]
+    return not missing, missing
+
+
+def compute_round_state(register, cache, period, audit_months, grace_weeks,
+                        today=None, class_requirements=None):
+    """Describe one audit round against the asset register.
+
+    The register is the denominator: every asset in scope gets an entry here,
+    including the ones that submitted nothing. That is the whole point - the
+    previous model could only show what arrived, so an asset that never
+    reported produced no row at all rather than a red one.
+
+    Assets fall into five buckets, and they are kept apart on purpose. Counting
+    an accounted-for asset as scanned would fold "we hold evidence" together
+    with "we hold an excuse", and the deviation count is exactly what the ISO
+    tool needs as a separate number.
+    """
+    today = today or date.today()
+    scan_start, scan_end, coverage_end = get_round_windows(period, audit_months, grace_weeks)
+
+    submissions = cache.submissions_in_period(period) if cache else []
+    by_asset = {}
+    for record in submissions:
+        asset_id = record.get('asset_id')
+        if not asset_id:
+            continue
+        current = by_asset.get(asset_id)
+        if current is None or record['submitted_at_dt'] > current['submitted_at_dt']:
+            by_asset[asset_id] = record
+
+    scanned, outstanding, manual, accounted, unexplained = [], [], [], [], []
+    seen_assets = set()
+
+    for entry in (register.in_scope(scan_start, scan_end) if register and register.loaded else []):
+        if entry['asset_id'] in seen_assets:
+            continue
+        seen_assets.add(entry['asset_id'])
+
+        record = by_asset.get(entry['asset_id'])
+        row = {'entry': entry, 'record': record}
+
+        if record:
+            complete, missing = evaluate_completeness(
+                entry['class'], record.get('reports'), class_requirements
+            )
+            row['complete'] = complete
+            row['missing'] = missing
+            row['timeliness'] = record.get('timeliness')
+            scanned.append(row)
+            continue
+
+        # Left scope during the round without ever being scanned. The departure
+        # is the justification, but only if someone wrote one down: a window
+        # closed without a reason is an unexplained disappearance, and
+        # subtracting it silently would raise the coverage rate.
+        left_during_round = entry['valid_to'] and scan_start <= entry['valid_to'] <= coverage_end
+        if left_during_round:
+            if entry.get('departure_reason'):
+                accounted.append(row)
+            else:
+                unexplained.append(row)
+            continue
+
+        if entry['class'] in MANUAL_CLASSES:
+            manual.append(row)
+            continue
+
+        outstanding.append(row)
+
+    denominator = len(scanned) + len(accounted) + len(outstanding) + len(unexplained)
+
+    return {
+        'period': period,
+        'scan_start': scan_start,
+        'scan_end': scan_end,
+        'coverage_end': coverage_end,
+        'is_open': scan_start <= today <= coverage_end,
+        'scanned': scanned,
+        'accounted': accounted,
+        'outstanding': outstanding,
+        'unexplained': unexplained,
+        'manual': manual,
+        'retired': register.retired() if register and register.loaded else [],
+        'unmatched': cache.unmatched(period) if cache else [],
+        'denominator': denominator,
+        'closeable': not outstanding and not unexplained,
+    }
+
 
 def normalise_serial(raw):
     """Return a usable hardware serial, or None when there is none.
@@ -912,6 +1046,11 @@ class Config:
 
                 # Asset register: the denominator compliance is measured against
                 self.asset_register_path = compliance.get('asset_register')
+
+                # Per-class requirement overrides. Requirements are named after
+                # what they are - sysinfo, hardening - and the tools that
+                # satisfy them differ per platform and change over time.
+                self.class_requirements = required_reports.get('per_class', {})
 
                 # Weeks past the audit month during which a submission still
                 # counts toward the round, and during which an asset entering
