@@ -49,6 +49,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **September audit period showing a March artifact**: a leftover test
   submission in `reports/2026-09/` made the new round look like it already had
   a system in it; it has been moved to the period it belongs to, `2026-03`
+- **`/health` reporting zeros on a compliance-mode install**: the endpoint
+  counted audit periods and called them reports, and looked for report files
+  inside the period directories rather than inside the systems
+  - statistics are now computed per storage mode: compliance mode counts
+    systems under `reports/<period>/<system>/`, legacy mode keeps counting at
+    the top level
+  - `total_report_directories` counts systems rather than periods,
+    `unique_hosts` is derived from the directory shape the active mode uses,
+    and `reports_by_type` looks inside system directories
+  - monitoring that alerted on these numbers has been seeing zeros; anything
+    calibrated against zero needs revisiting
 
 ## 1.1.0
 

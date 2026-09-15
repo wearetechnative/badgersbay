@@ -55,15 +55,15 @@ containing `status`, `http_code`, `service` and `error`.
 
 ### Requirement: Reports by Type Statistics
 
-The health endpoint SHALL return counts of each supported report type found in
-storage, using `fastfetch` as the system information report type.
+The health endpoint SHALL return the number of system directories holding each
+supported report type.
 
 ```json
 {
   "statistics": {
     "reports_by_type": {
-      "lynis": 40,
-      "fastfetch": 38
+      "lynis": 16,
+      "fastfetch": 1
     }
   }
 }
@@ -72,11 +72,16 @@ storage, using `fastfetch` as the system information report type.
 #### Scenario: Report type counting
 - **WHEN** the health endpoint is requested
 - **THEN** the response includes counts for:
-  - `lynis`: number of directories containing `lynis-report.json`
-  - `fastfetch`: number of directories containing `fastfetch-report.json`
+  - `lynis`: number of system directories containing `lynis-report.json`
+  - `fastfetch`: number of system directories containing `fastfetch-report.json`
+
+#### Scenario: Counted at the system level
+- **WHEN** compliance mode is enabled
+- **THEN** report files are looked for inside system directories, not inside
+  audit period directories
 
 #### Scenario: Zero reports of a type
-- **WHEN** no directories contain a specific report type
+- **WHEN** no system directory contains a specific report type
 - **THEN** that report type's count is 0 in the response
 
 #### Scenario: Legacy neofetch files not counted
@@ -89,18 +94,30 @@ storage, using `fastfetch` as the system information report type.
 
 ### Requirement: Directory and host statistics
 
-The endpoint SHALL report the number of report directories and the number of
-distinct hostnames derived from them.
+The endpoint SHALL report the number of system directories and the number of
+distinct hostnames derived from them, counted according to the active storage
+mode.
 
 #### Scenario: Total report directories
 - **WHEN** health is requested
-- **THEN** `statistics.total_report_directories` is the count of subdirectories
-  in the configured storage location
+- **THEN** `statistics.total_report_directories` is the count of system
+  directories, not of audit periods
+
+#### Scenario: Compliance mode layout
+- **WHEN** compliance mode is enabled and reports live under
+  `reports/<period>/<hostname-username>/`
+- **THEN** systems are counted one level below the period directories, and
+  `statistics.unique_hosts` is derived from the `hostname-username` part
+
+#### Scenario: Legacy mode layout
+- **WHEN** compliance mode is disabled and directories are named
+  `<hostname>-<username>-<yyyymmdd>`
+- **THEN** systems are counted at the top level and hostnames parsed from that
+  shape
 
 #### Scenario: Unique hosts
-- **WHEN** directory names follow `<hostname>-<username>-<yyyymmdd>`
-- **THEN** `statistics.unique_hosts` is the count of distinct hostnames parsed
-  from them
+- **WHEN** several directories belong to the same hostname
+- **THEN** `statistics.unique_hosts` counts that hostname once
 
 ### Requirement: Uptime tracking
 
