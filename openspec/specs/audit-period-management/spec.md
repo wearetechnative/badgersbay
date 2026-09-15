@@ -1,4 +1,11 @@
-## ADDED Requirements
+# Audit Period Management
+
+## Purpose
+Defines how the server groups submitted reports into audit periods: which
+months count as audit months, how an upload date maps to a period, how those
+periods are laid out on disk, and how compliance tracking is enabled.
+
+## Requirements
 
 ### Requirement: Configure audit months
 

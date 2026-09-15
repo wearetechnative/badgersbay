@@ -1,11 +1,10 @@
 # Auth File Loading
 
-## Overview
+## Purpose
 
 The server requires explicit CLI arguments for authentication files and loads them at startup. No fallback locations are supported - both files must be provided or the server fails to start.
 
-## ADDED Requirements
-
+## Requirements
 ### Requirement: CLI Arguments Required
 
 The server SHALL require both `--token-file` and `--dashboard-password-file` CLI arguments to start.
