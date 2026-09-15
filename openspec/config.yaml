@@ -20,14 +20,14 @@ context: |
   1. **Lynis** - System hardening and security audit
   2. **Trivy** - Container and OS vulnerability scanner
   3. **Vulnix** - NixOS-specific vulnerability scanner
-  4. **Neofetch** - System information (used as metadata/identifier)
+  4. **Fastfetch** - System information (used as metadata/identifier)
 
   **Key Conventions:**
   - Reports stored as: `<hostname>-<username>-<yyyymmdd>/`
   - Valid system combinations:
-    - Neofetch + Lynis + Trivy (containers/traditional)
-    - Neofetch + Lynis + Vulnix (NixOS systems)
-  - Neofetch is ALWAYS required (provides system identity)
+    - Fastfetch + Lynis + Trivy (containers/traditional)
+    - Fastfetch + Lynis + Vulnix (NixOS systems)
+  - Fastfetch is ALWAYS required (provides system identity)
   - Dashboard auto-refreshes every 30 seconds
   - All JSON validation happens before storage
 

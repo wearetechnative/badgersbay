@@ -1,48 +1,66 @@
-## ADDED Requirements
+# Report Completeness Validation
+
+## Purpose
+Defines when a system's set of submitted reports counts as complete, how the
+required set is configured, how completeness is tracked per audit period, and
+how missing reports are reported back.
+
+## Requirements
 
 ### Requirement: Define complete report set
 
 The system SHALL define a complete report set as containing all mandatory reports plus at least one security scanner report.
 
 #### Scenario: Complete set with Trivy
-- **WHEN** system directory contains neofetch-report.json, lynis-report.json, and trivy-report.json
+- **WHEN** system directory contains fastfetch-report.json, lynis-report.json, and trivy-report.json
 - **THEN** report set is marked as complete
 
 #### Scenario: Complete set with Vulnix
-- **WHEN** system directory contains neofetch-report.json, lynis-report.json, and vulnix-report.json
+- **WHEN** system directory contains fastfetch-report.json, lynis-report.json, and vulnix-report.json
 - **THEN** report set is marked as complete
 
 #### Scenario: Complete set with both scanners
-- **WHEN** system directory contains neofetch-report.json, lynis-report.json, trivy-report.json, and vulnix-report.json
+- **WHEN** system directory contains fastfetch-report.json, lynis-report.json, trivy-report.json, and vulnix-report.json
 - **THEN** report set is marked as complete (having both is acceptable)
 
 #### Scenario: Incomplete - missing security scanner
-- **WHEN** system directory contains only neofetch-report.json and lynis-report.json
+- **WHEN** system directory contains only fastfetch-report.json and lynis-report.json
 - **THEN** report set is marked as incomplete with reason "Missing security scanner (trivy or vulnix required)"
 
 #### Scenario: Incomplete - missing lynis
-- **WHEN** system directory contains neofetch-report.json and trivy-report.json but not lynis-report.json
+- **WHEN** system directory contains fastfetch-report.json and trivy-report.json but not lynis-report.json
 - **THEN** report set is marked as incomplete with reason "Missing lynis-report.json"
 
-#### Scenario: Incomplete - missing neofetch
-- **WHEN** system directory contains lynis-report.json and trivy-report.json but not neofetch-report.json
-- **THEN** report set is marked as incomplete with reason "Missing neofetch-report.json"
+#### Scenario: Incomplete - missing fastfetch
+- **WHEN** system directory contains lynis-report.json and trivy-report.json but not fastfetch-report.json
+- **THEN** report set is marked as incomplete with reason "Missing fastfetch-report.json"
 
 ### Requirement: Configure required reports
 
-The system SHALL allow configuration of required reports via config.yaml.
+The system SHALL allow configuration of required reports via config.yaml, using
+`fastfetch` as the system information report type.
 
 #### Scenario: Configure mandatory reports
-- **WHEN** config.yaml contains `compliance.required_reports.mandatory: [neofetch, lynis]`
-- **THEN** both neofetch and lynis are required for all systems
+- **WHEN** config.yaml contains `compliance.required_reports.mandatory: [fastfetch, lynis]`
+- **THEN** both fastfetch and lynis are required for all systems
 
 #### Scenario: Configure one-of scanner requirement
-- **WHEN** config.yaml contains `compliance.required_reports.one_of: [trivy, vulnix]`
-- **THEN** at least one of trivy or vulnix is required
+- **WHEN** config.yaml contains a non-empty `compliance.required_reports.one_of`
+- **THEN** at least one of the listed report types is required
 
 #### Scenario: Default configuration
-- **WHEN** compliance.required_reports section is not specified
-- **THEN** system defaults to mandatory: [neofetch, lynis] and one_of: [trivy, vulnix]
+- **WHEN** the `compliance.required_reports` section is not specified
+- **THEN** the system defaults to mandatory `[fastfetch, lynis]` and one_of `[]`
+
+#### Scenario: Missing system information report
+- **WHEN** a system directory contains `lynis-report.json` but no
+  `fastfetch-report.json`
+- **THEN** the report set is incomplete with reason "Missing fastfetch"
+
+#### Scenario: Complete set
+- **WHEN** a system directory contains `fastfetch-report.json` and
+  `lynis-report.json`
+- **THEN** the report set is marked complete
 
 ### Requirement: Track completeness per audit period
 
@@ -61,11 +79,11 @@ The system SHALL track report completeness separately for each audit period.
 The system SHALL identify which specific reports are missing from an incomplete set.
 
 #### Scenario: List missing reports
-- **WHEN** system directory has neofetch and lynis but no scanner
+- **WHEN** system directory has fastfetch and lynis but no scanner
 - **THEN** system reports "Missing: trivy or vulnix"
 
 #### Scenario: Multiple missing reports
-- **WHEN** system directory has only neofetch
+- **WHEN** system directory has only fastfetch
 - **THEN** system reports "Missing: lynis, trivy or vulnix"
 
 #### Scenario: Complete set shows no missing

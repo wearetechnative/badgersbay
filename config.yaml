@@ -14,7 +14,7 @@ compliance:
   required_reports:
     # Always required
     mandatory:
-      - neofetch
+      - fastfetch
       - lynis
 
     # At least one required (empty list = none required)
