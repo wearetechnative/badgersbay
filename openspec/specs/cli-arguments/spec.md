@@ -1,11 +1,10 @@
 # CLI Arguments
 
-## Overview
+## Purpose
 
 The server accepts command line arguments to control configuration and provide usage information.
 
-## ADDED Requirements
-
+## Requirements
 ### Requirement: Config File Path Argument
 
 The server SHALL accept a `--config` argument to specify the path to the configuration file.

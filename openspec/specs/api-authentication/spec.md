@@ -1,11 +1,10 @@
 # API Authentication
 
-## Overview
+## Purpose
 
 The server requires valid Bearer tokens for all report submission endpoints to prevent unauthorized data uploads.
 
-## ADDED Requirements
-
+## Requirements
 ### Requirement: Bearer Token Validation
 
 The server SHALL validate Bearer tokens in the Authorization header for all POST requests to report submission endpoints.

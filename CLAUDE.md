@@ -6,7 +6,7 @@ This document provides context for AI assistants working on this project.
 
 A **centralized security report aggregation server** that collects vulnerability scan results from multiple hosts and displays them in a unified dashboard.
 
-Think of it as a "security scan inbox" - clients run scans (Lynis) and POST their results here along with system information (Neofetch). Sysadmins visit the dashboard to see the security posture of all their systems at a glance.
+Think of it as a "security scan inbox" - clients run scans (Lynis) and POST their results here along with system information (Fastfetch). Sysadmins visit the dashboard to see the security posture of all their systems at a glance.
 
 ## Architecture Philosophy
 
@@ -34,7 +34,7 @@ Host System                    Honeybadger Server
 ┌────────────┐                ┌──────────────────┐
 │            │                │                  │
 │  Lynis ────┼───┐            │   ┌──────────┐   │
-│  Neofetch ─┼───┼── POST ───▶│   │Validation│   │
+│ Fastfetch ─┼───┼── POST ───▶│   │Validation│   │
 │            │   │            │   └────┬─────┘   │
 │            │   │            │        │         │
 │            │                │        ▼         │
@@ -56,16 +56,16 @@ Sysadmin Browser              │   ┌──────────┐   │
 | **Lynis** | System hardening audit | All Linux/Unix |
 | **Trivy** | Container and OS vulnerability scanner | All (containers/traditional) |
 | **Vulnix** | NixOS-specific vulnerability scanner | NixOS systems |
-| **Neofetch** | System metadata/identity | All (required!) |
+| **Fastfetch** | System metadata/identity | All (required!) |
 
 ### The "OK" Logic
 
 A system is marked **OK** (green) if it has:
-- **Neofetch** (always required - provides system identity)
+- **Fastfetch** (always required - provides system identity)
 - **AND** Lynis (system audit - always needed)
 - **AND** Trivy or Vulnix (vulnerability scanner - at least one)
 
-**Rationale:** For ISO compliance, systems need baseline hardening audit (Lynis), identity (Neofetch), and vulnerability scanning (Trivy or Vulnix depending on OS).
+**Rationale:** For ISO compliance, systems need baseline hardening audit (Lynis), identity (Fastfetch), and vulnerability scanning (Trivy or Vulnix depending on OS).
 
 ## File Locations
 
@@ -142,7 +142,7 @@ The server supports flexible configuration file location via CLI arguments:
       ├── lynis-report.json
       ├── trivy-report.json
       ├── vulnix-report.json
-      └── neofetch-report.json
+      └── fastfetch-report.json
 ```
 
 **Example:** `webserver01-admin-20260316/`
@@ -312,7 +312,7 @@ Traditional endpoint for submitting one report at a time:
 New endpoint for submitting multiple reports at once:
 - Client sends X-Hostname, X-Username headers
 - Body contains tar/tar.gz archive with multiple JSON files
-- Filename-based report type detection (lynis.json, neofetch-report.json, etc.)
+- Filename-based report type detection (lynis.json, fastfetch-report.json, etc.)
 - Returns detailed per-file status (HTTP 200/207/400)
 - Security: validates paths, enforces size limits (50MB tar, 10MB per file, max 100 files)
 
@@ -340,7 +340,7 @@ curl -X POST http://localhost:7123/ \
   -d @test-lynis-report.json
 
 # Manual test - tar submission
-tar -czf reports.tar.gz test-lynis-report.json test-neofetch-report.json
+tar -czf reports.tar.gz test-lynis-report.json test-fastfetch-report.json
 curl -X POST http://localhost:7123/submit-tar \
   -H "X-Hostname: testhost" \
   -H "X-Username: testuser" \
@@ -409,7 +409,7 @@ When proposing changes, consider:
 - Issues: https://github.com/wearetechnative/toortools (if public)
 - Specs: See `openspec/specs/` for detailed capability docs
 - Bugfixes: See `BUGFIXES.md` for documented bug fixes and their resolutions
-- Code: Read `honeybadger_server.py` - it's only 837 lines!
+- Code: Read `honeybadger_server.py` - it's only 2186 lines!
 
 ## Git Commit Guidelines
 

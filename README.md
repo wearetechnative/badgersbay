@@ -86,14 +86,14 @@ my_secure_password_123
 Submit individual reports with Bearer token authentication:
 
 ```bash
-# Neofetch (system info)
+# Fastfetch (system info)
 curl -X POST http://server:7123/ \
   -H "Authorization: Bearer hb_production_token_abc123" \
   -H "Content-Type: application/json" \
   -H "X-Hostname: $(hostname)" \
   -H "X-Username: $(whoami)" \
-  -H "X-Report-Type: neofetch" \
-  -d @neofetch-report.json
+  -H "X-Report-Type: fastfetch" \
+  -d @fastfetch-report.json
 
 # Lynis (hardening audit)
 curl -X POST http://server:7123/ \
@@ -130,7 +130,7 @@ Submit multiple reports in a single request:
 ```bash
 # Create archive with all reports
 tar -czf reports.tar.gz \
-  neofetch-report.json \
+  fastfetch-report.json \
   lynis-report.json \
   trivy-report.json
 
@@ -203,7 +203,7 @@ Returns:
   "statistics": {
     "total_report_directories": 42,
     "unique_hosts": 10,
-    "reports_by_type": {"lynis": 40, "neofetch": 42}
+    "reports_by_type": {"lynis": 40, "fastfetch": 42}
   }
 }
 ```
@@ -332,7 +332,7 @@ WantedBy=multi-user.target
      -H "Authorization: Bearer your_token" \
      -H "X-Hostname: test" \
      -H "X-Username: test" \
-     -H "X-Report-Type: neofetch" \
+     -H "X-Report-Type: fastfetch" \
      -d '{"os": "NixOS"}'
 
    # Test dashboard (should prompt for password)
@@ -349,13 +349,13 @@ If you need to rollback, downgrade to version 1.0.x and remove auth arguments fr
 
 | Type | Purpose | Required |
 |------|---------|----------|
-| **Neofetch** | System metadata (hostname, OS, kernel) | Always |
+| **Fastfetch** | System metadata (hostname, OS, kernel) | Always |
 | **Lynis** | System hardening audit | Always |
 | **Trivy** | Container/OS vulnerability scanner | One of Trivy or Vulnix |
 | **Vulnix** | NixOS vulnerability scanner | One of Trivy or Vulnix |
 
 A system is marked "Complete" when it has:
-- Neofetch (identity)
+- Fastfetch (identity)
 - Lynis (hardening audit)
 - Trivy OR Vulnix (vulnerability scan)
 

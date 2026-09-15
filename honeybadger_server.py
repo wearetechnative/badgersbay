@@ -217,16 +217,16 @@ class ComplianceCache:
                     self.config.required_reports_one_of
                 )
 
-                # Extract OS type from neofetch if available
+                # Extract OS type from fastfetch if available
                 os_type = 'unknown'
-                neofetch_path = system_dir / 'neofetch-report.json'
-                if neofetch_path.exists():
+                fastfetch_path = system_dir / 'fastfetch-report.json'
+                if fastfetch_path.exists():
                     try:
-                        with open(neofetch_path, 'r') as f:
-                            neofetch_data = json.load(f)
-                            os_type = neofetch_data.get('os', 'unknown')
+                        with open(fastfetch_path, 'r') as f:
+                            fastfetch_data = json.load(f)
+                            os_type = fastfetch_data.get('os', 'unknown')
                     except Exception as e:
-                        logger.warning(f"Could not read OS from neofetch: {e}")
+                        logger.warning(f"Could not read OS from fastfetch: {e}")
 
                 # Store in cache
                 key = f"{hostname}-{username}"
@@ -326,7 +326,7 @@ def check_completeness(reports, required_mandatory, required_one_of):
     Check if a report set is complete.
 
     Args:
-        reports: list of report types present (e.g., ['neofetch', 'lynis', 'trivy'])
+        reports: list of report types present (e.g., ['fastfetch', 'lynis', 'trivy'])
         required_mandatory: list of mandatory report types
         required_one_of: list of report types where at least one is required
 
@@ -334,9 +334,9 @@ def check_completeness(reports, required_mandatory, required_one_of):
         tuple: (is_complete: bool, missing: list)
 
     Examples:
-        >>> check_completeness(['neofetch', 'lynis', 'trivy'], ['neofetch', 'lynis'], ['trivy', 'vulnix'])
+        >>> check_completeness(['fastfetch', 'lynis', 'trivy'], ['fastfetch', 'lynis'], ['trivy', 'vulnix'])
         (True, [])
-        >>> check_completeness(['neofetch', 'lynis'], ['neofetch', 'lynis'], ['trivy', 'vulnix'])
+        >>> check_completeness(['fastfetch', 'lynis'], ['fastfetch', 'lynis'], ['trivy', 'vulnix'])
         (False, ['trivy or vulnix'])
     """
     missing = []
@@ -416,7 +416,7 @@ class Config:
 
                 # Load required reports configuration
                 required_reports = compliance.get('required_reports', {})
-                self.required_reports_mandatory = required_reports.get('mandatory', ['neofetch', 'lynis'])
+                self.required_reports_mandatory = required_reports.get('mandatory', ['fastfetch', 'lynis'])
                 self.required_reports_one_of = required_reports.get('one_of', ['trivy', 'vulnix'])
 
                 # Validate audit months
@@ -550,7 +550,7 @@ class ReportHandler(BaseHTTPRequestHandler):
 
     def validate_report_type(self, report_type):
         """Validate that the report type is supported"""
-        valid_types = ['lynis', 'neofetch', 'trivy', 'vulnix']
+        valid_types = ['lynis', 'fastfetch', 'trivy', 'vulnix']
         if report_type.lower() not in valid_types:
             return False, f"Invalid report type '{report_type}'. Supported types: {', '.join(valid_types)}"
         return True, None
@@ -568,14 +568,14 @@ class ReportHandler(BaseHTTPRequestHandler):
                 logger.warning("Lynis report may be invalid: missing 'report_version' or 'lynis_version' field")
             # Note: We log a warning but don't fail, to allow for different Lynis versions
 
-        # Neofetch validation
-        elif report_type_lower == 'neofetch':
-            # Neofetch/system info should be a dict with basic system fields
+        # Fastfetch validation
+        elif report_type_lower == 'fastfetch':
+            # Fastfetch/system info should be a dict with basic system fields
             if not isinstance(data, dict):
-                return False, "Invalid Neofetch report: must be a JSON object"
+                return False, "Invalid Fastfetch report: must be a JSON object"
             # Basic validation - check if it has some system-related fields
             if not any(key in data for key in ['hostname', 'os', 'kernel', 'system']):
-                logger.warning("Neofetch report may be invalid: missing common system info fields")
+                logger.warning("Fastfetch report may be invalid: missing common system info fields")
 
         # Trivy validation
         elif report_type_lower == 'trivy':
@@ -610,8 +610,8 @@ class ReportHandler(BaseHTTPRequestHandler):
         # Match patterns for each report type
         if 'lynis' in basename and basename.endswith('.json'):
             return 'lynis'
-        elif 'neofetch' in basename and basename.endswith('.json'):
-            return 'neofetch'
+        elif 'fastfetch' in basename and basename.endswith('.json'):
+            return 'fastfetch'
         elif 'trivy' in basename and basename.endswith('.json'):
             return 'trivy'
         elif 'vulnix' in basename and basename.endswith('.json'):
@@ -680,8 +680,16 @@ class ReportHandler(BaseHTTPRequestHandler):
 
         Returns:
             tuple: (success, result)
-                On success: (True, [(filename, report_type, json_content), ...])
+                On success: (True, {
+                    'reports': [(filename, report_type, json_content), ...],
+                    'unrecognised': [{'file': name, 'reason': message}, ...],
+                })
                 On failure: (False, error_message)
+
+        A member the server cannot make sense of is reported in 'unrecognised',
+        not treated as a reason to reject the archive. Only an archive that is
+        itself unusable - unreadable, oversized, or carrying an unsafe path -
+        is a hard failure.
         """
         try:
             # Open tar archive with auto-detection of compression
@@ -707,6 +715,12 @@ class ReportHandler(BaseHTTPRequestHandler):
             json_files = []
 
             for member in members:
+                # Validate path security for every member, including the
+                # non-JSON files the client bundles alongside the reports
+                valid, error_msg = self.validate_tar_member_path(member)
+                if not valid:
+                    return False, error_msg
+
                 # Only process files (skip directories)
                 if not member.isfile():
                     continue
@@ -715,18 +729,9 @@ class ReportHandler(BaseHTTPRequestHandler):
                 if not member.name.endswith('.json'):
                     continue
 
-                # Validate path security
-                valid, error_msg = self.validate_tar_member_path(member)
-                if not valid:
-                    return False, error_msg
-
                 # Collect size for validation
                 member_sizes[member.name] = member.size
                 json_files.append(member)
-
-            # Check if we have any JSON files
-            if not json_files:
-                return False, "Tar archive contains no report files"
 
             # Validate size limits
             valid, error_msg = self.validate_tar_size_limits(content_length, member_sizes)
@@ -735,11 +740,16 @@ class ReportHandler(BaseHTTPRequestHandler):
 
             # Extract and process JSON files
             results = []
+            unrecognised = []
             for member in json_files:
                 # Detect report type from filename
                 report_type = self.detect_report_type_from_filename(member.name)
                 if not report_type:
-                    return False, f"Cannot determine report type for file: {member.name}"
+                    unrecognised.append({
+                        'file': member.name,
+                        'reason': 'Unrecognised report type'
+                    })
+                    continue
 
                 # Extract file content
                 try:
@@ -751,12 +761,18 @@ class ReportHandler(BaseHTTPRequestHandler):
 
                     results.append((member.name, report_type, json_content))
                 except json.JSONDecodeError as e:
-                    return False, f"Invalid JSON in file {member.name}: {str(e)}"
+                    unrecognised.append({
+                        'file': member.name,
+                        'reason': f"Invalid JSON: {str(e)}"
+                    })
                 except Exception as e:
-                    return False, f"Error extracting file {member.name}: {str(e)}"
+                    unrecognised.append({
+                        'file': member.name,
+                        'reason': f"Error extracting file: {str(e)}"
+                    })
 
             tar.close()
-            return True, results
+            return True, {'reports': results, 'unrecognised': unrecognised}
 
         except Exception as e:
             tar.close()
@@ -769,7 +785,7 @@ class ReportHandler(BaseHTTPRequestHandler):
         # Count reports
         total_reports = 0
         unique_hosts = set()
-        report_counts = {'lynis': 0, 'neofetch': 0}
+        report_counts = {'lynis': 0, 'fastfetch': 0}
 
         if storage_path.exists():
             for item in storage_path.iterdir():
@@ -786,8 +802,8 @@ class ReportHandler(BaseHTTPRequestHandler):
                     # Count report types
                     if (item / 'lynis-report.json').exists():
                         report_counts['lynis'] += 1
-                    if (item / 'neofetch-report.json').exists():
-                        report_counts['neofetch'] += 1
+                    if (item / 'fastfetch-report.json').exists():
+                        report_counts['fastfetch'] += 1
 
         # Calculate uptime
         uptime_seconds = int(time.time() - self.start_time) if self.start_time else 0
@@ -876,10 +892,10 @@ class ReportHandler(BaseHTTPRequestHandler):
             # Extract OS type (will be used in compliance mode)
             os_type = self.headers.get('X-OS-Type', 'unknown')
 
-            # If this is a neofetch report, extract OS type from the data itself
-            if report_type.lower() == 'neofetch' and isinstance(data, dict) and 'os' in data:
+            # If this is a fastfetch report, extract OS type from the data itself
+            if report_type.lower() == 'fastfetch' and isinstance(data, dict) and 'os' in data:
                 os_type = data.get('os', os_type)
-                logger.info(f"Extracted OS type from neofetch data: {os_type}")
+                logger.info(f"Extracted OS type from fastfetch data: {os_type}")
 
             # Save the report
             saved_path, audit_period = self.save_report(hostname, username, report_type, data, os_type)
@@ -915,7 +931,11 @@ class ReportHandler(BaseHTTPRequestHandler):
             self.send_error(500, f"Internal server error: {str(e)}")
 
     def do_POST_submit_tar(self):
-        """Handle POST requests with tar archive - saves tar.gz as-is without extraction"""
+        """Handle POST requests with tar archive
+
+        Stores the archive whole and extracts the reports it recognises,
+        reporting per-file status for any JSON member it does not.
+        """
         try:
             # Get required headers
             hostname = self.headers.get('X-Hostname')
@@ -940,12 +960,24 @@ class ReportHandler(BaseHTTPRequestHandler):
             # Read request body
             tar_data = self.rfile.read(content_length)
 
-            # Basic validation: check if it's a valid tar file
-            try:
-                tarfile.open(fileobj=io.BytesIO(tar_data), mode='r:*')
-            except Exception as e:
-                self.send_error(400, f"Invalid tar archive: {str(e)}")
+            # Extract the reports the server recognises. Unrecognised members
+            # are reported back, not treated as a reason to reject the archive.
+            success, extraction = self.extract_and_validate_tar(tar_data, content_length)
+            if not success:
+                self.send_error(400, extraction)
                 return
+
+            extracted_reports = extraction['reports']
+            unrecognised = extraction['unrecognised']
+
+            # OS type comes from the archive's fastfetch report; the X-OS-Type
+            # header is only a fallback for archives without one
+            os_type = self.headers.get('X-OS-Type', 'unknown')
+            for _, report_type, data in extracted_reports:
+                if report_type == 'fastfetch' and isinstance(data, dict) and 'os' in data:
+                    os_type = data.get('os', os_type)
+                    logger.info(f"Extracted OS type from fastfetch data: {os_type}")
+                    break
 
             # Determine storage path based on compliance mode
             if self.config.compliance_enabled:
@@ -976,27 +1008,55 @@ class ReportHandler(BaseHTTPRequestHandler):
 
             logger.info(f"Tar file saved: {tar_path} ({content_length} bytes)")
 
+            # Save each recognised report alongside the stored archive
+            saved_reports = []
+            for member_name, report_type, data in extracted_reports:
+                try:
+                    saved_path, _ = self.save_report(hostname, username, report_type, data, os_type)
+                    saved_reports.append({
+                        'file': member_name,
+                        'report_type': report_type,
+                        'path': str(saved_path)
+                    })
+                    logger.info(f"Report saved from archive: {saved_path}")
+                except Exception as e:
+                    logger.error(f"Could not save {report_type} report from {member_name}: {e}")
+                    unrecognised.append({
+                        'file': member_name,
+                        'reason': f"Could not save report: {str(e)}"
+                    })
+
             # Update compliance cache if enabled
             if self.config.compliance_enabled and self.compliance_cache:
-                # Get OS type from X-OS-Type header if provided
-                os_type = self.headers.get('X-OS-Type', 'unknown')
-
-                # Update cache with 'tar' as report type
+                # Record the archive itself, plus every report extracted from it
                 self.compliance_cache.update_system(
                     audit_period, hostname, username, 'tar', os_type
                 )
-                logger.info(f"Cache updated: {audit_period}/{hostname}-{username} with tar report")
+                for entry in saved_reports:
+                    self.compliance_cache.update_system(
+                        audit_period, hostname, username, entry['report_type'], os_type
+                    )
+                logger.info(
+                    f"Cache updated: {audit_period}/{hostname}-{username} with tar report "
+                    f"and {len(saved_reports)} extracted report(s)"
+                )
 
-            # Send success response
-            self.send_response(200)
+            # 200 when every JSON member was recognised and stored; 207 when
+            # some were not, or when the archive yielded no reports at all
+            status_code = 200 if (saved_reports and not unrecognised) else 207
+
+            self.send_response(status_code)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
 
             response = {
-                'status': 'success',
+                'status': 'success' if status_code == 200 else 'partial',
                 'message': f"Tar archive saved successfully",
                 'path': str(tar_path),
-                'size': content_length
+                'size': content_length,
+                'os_type': os_type,
+                'reports_saved': saved_reports,
+                'unrecognised': unrecognised
             }
 
             self.wfile.write(json.dumps(response, indent=2).encode())
@@ -1011,7 +1071,7 @@ class ReportHandler(BaseHTTPRequestHandler):
         Args:
             hostname: System hostname
             username: User who performed scan
-            report_type: Type of report (lynis, trivy, vulnix, neofetch)
+            report_type: Type of report (lynis, trivy, vulnix, fastfetch)
             data: Report JSON data
             os_type: Operating system type (optional)
 
@@ -1023,8 +1083,8 @@ class ReportHandler(BaseHTTPRequestHandler):
         # Determine filename based on report type
         if report_type_lower == 'lynis':
             filename = 'lynis-report.json'
-        elif report_type_lower == 'neofetch':
-            filename = 'neofetch-report.json'
+        elif report_type_lower == 'fastfetch':
+            filename = 'fastfetch-report.json'
         elif report_type_lower == 'trivy':
             filename = 'trivy-report.json'
         elif report_type_lower == 'vulnix':
@@ -1117,7 +1177,7 @@ class ReportHandler(BaseHTTPRequestHandler):
 
             # Check which reports exist
             has_lynis = (item / 'lynis-report.json').exists()
-            has_neofetch = (item / 'neofetch-report.json').exists()
+            has_fastfetch = (item / 'fastfetch-report.json').exists()
 
             reports.append({
                 'hostname': hostname,
@@ -1125,7 +1185,7 @@ class ReportHandler(BaseHTTPRequestHandler):
                 'date': date_str,
                 'last_update': last_update,
                 'has_lynis': has_lynis,
-                'has_neofetch': has_neofetch,
+                'has_fastfetch': has_fastfetch,
                 'path': str(item)
             })
 
@@ -1375,7 +1435,7 @@ class ReportHandler(BaseHTTPRequestHandler):
 
                 # Build report badges
                 badges = []
-                report_map = {'neofetch': 'N', 'lynis': 'L', 'trivy': 'T', 'vulnix': 'V'}
+                report_map = {'fastfetch': 'F', 'lynis': 'L'}
                 for report_type, badge_text in report_map.items():
                     if report_type in reports:
                         download_url = f"/reports/{selected_period}/{hostname}-{username}/{report_type}-report.json"
@@ -1421,7 +1481,7 @@ class ReportHandler(BaseHTTPRequestHandler):
         </div>
 
         <div style="margin-top: 20px; text-align: center; color: #666; font-size: 12px;">
-            Legend: N=Neofetch, L=Lynis, T=Trivy, V=Vulnix, TAR=Tar Archive
+            Legend: F=Fastfetch, L=Lynis, TAR=Tar Archive
         </div>
     </div>
 </body>
@@ -1784,8 +1844,8 @@ class ReportHandler(BaseHTTPRequestHandler):
                 <div class="stat-label">Lynis reports</div>
             </div>
             <div class="stat-card">
-                <div class="stat-number">""" + str(sum(1 for r in reports if r['has_neofetch'])) + """</div>
-                <div class="stat-label">Neofetch reports</div>
+                <div class="stat-number">""" + str(sum(1 for r in reports if r['has_fastfetch'])) + """</div>
+                <div class="stat-label">Fastfetch reports</div>
             </div>
         </div>
 """
@@ -1822,8 +1882,8 @@ class ReportHandler(BaseHTTPRequestHandler):
 
             now = datetime.now()
             for report in reports:
-                # Determine status: OK if both neofetch and lynis are present
-                has_valid_combination = report['has_neofetch'] and report['has_lynis']
+                # Determine status: OK if both fastfetch and lynis are present
+                has_valid_combination = report['has_fastfetch'] and report['has_lynis']
 
                 status_text = 'OK' if has_valid_combination else 'NOK'
                 status_class = 'status-ok' if has_valid_combination else 'status-nok'
@@ -1845,13 +1905,13 @@ class ReportHandler(BaseHTTPRequestHandler):
                 if report['has_lynis']:
                     lynis_url = f"/reports/{dir_name}/lynis-report.json"
                     reports_badges.append(f'<a href="{lynis_url}" class="badge badge-success" target="_blank">Lynis</a>')
-                if report['has_neofetch']:
-                    neofetch_url = f"/reports/{dir_name}/neofetch-report.json"
-                    reports_badges.append(f'<a href="{neofetch_url}" class="badge badge-success" target="_blank">Neofetch</a>')
+                if report['has_fastfetch']:
+                    fastfetch_url = f"/reports/{dir_name}/fastfetch-report.json"
+                    reports_badges.append(f'<a href="{fastfetch_url}" class="badge badge-success" target="_blank">Fastfetch</a>')
                 else:
-                    # Show red badge if neofetch is missing (it's required)
-                    reports_badges.append('<span class="badge badge-danger">Missing Neofetch</span>')
-                if not any([report['has_lynis'], report['has_neofetch']]):
+                    # Show red badge if fastfetch is missing (it's required)
+                    reports_badges.append('<span class="badge badge-danger">Missing Fastfetch</span>')
+                if not any([report['has_lynis'], report['has_fastfetch']]):
                     reports_badges = ['<span class="badge badge-secondary">None</span>']
 
                 html += f"""

@@ -1,11 +1,10 @@
 # Config Loading
 
-## Overview
+## Purpose
 
 The server loads configuration from a YAML file using a fallback search order to support various deployment scenarios.
 
-## ADDED Requirements
-
+## Requirements
 ### Requirement: Config File Search Order
 
 The server SHALL search for configuration files in the following order and use the first one found:

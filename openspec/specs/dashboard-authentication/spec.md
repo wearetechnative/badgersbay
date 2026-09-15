@@ -1,11 +1,10 @@
 # Dashboard Authentication
 
-## Overview
+## Purpose
 
 The server requires HTTP Basic Authentication for accessing the web dashboard to prevent unauthorized viewing of compliance data.
 
-## ADDED Requirements
-
+## Requirements
 ### Requirement: Basic Auth Validation
 
 The server SHALL validate HTTP Basic Authentication credentials for all GET requests to the dashboard.

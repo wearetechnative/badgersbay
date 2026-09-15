@@ -1,213 +1,130 @@
 # Health Monitoring
 
-## Overview
+## Purpose
+Defines the unauthenticated `/health` endpoint: its response contract, the
+statistics it reports, and how uptime and storage accessibility are determined.
+The endpoint is consumed by monitoring systems and container orchestration, so
+its field names and shapes are a contract rather than documentation.
 
-Machine-readable health check endpoint providing server status, uptime, and statistics. Designed for integration with monitoring systems (Prometheus, Nagios, etc.).
+## Requirements
 
-## Endpoint
+### Requirement: Health endpoint is unauthenticated
 
-```
-GET /health
-Content-Type: application/json
-```
+The server SHALL serve `GET /health` without authentication and SHALL return
+`application/json`.
 
-## Response Format
+#### Scenario: No credentials supplied
+- **WHEN** `GET /health` is requested without an Authorization header
+- **THEN** the server responds normally rather than with 401
 
-### Success Response (HTTP 200)
+#### Scenario: Content type
+- **WHEN** `GET /health` is requested
+- **THEN** the response `Content-Type` is `application/json`
 
-```json
-{
-  "status": "ok",
-  "http_code": 200,
-  "service": "honeybadger-server",
-  "timestamp": "2026-03-16T14:30:00.123456",
-  "uptime": {
-    "seconds": 3600,
-    "human_readable": "1h 0m"
-  },
-  "statistics": {
-    "total_report_directories": 42,
-    "unique_hosts": 15,
-    "reports_by_type": {
-      "lynis": 40,
-      "neofetch": 38
-    }
-  },
-  "storage": {
-    "location": "./reports",
-    "accessible": true
-  }
-}
-```
+### Requirement: Success response structure
 
-### Error Response (HTTP 500)
+A healthy server SHALL respond with HTTP 200 and a body containing `status`,
+`http_code`, `service`, `timestamp`, `uptime`, `statistics` and `storage`.
 
-```json
-{
-  "status": "error",
-  "http_code": 500,
-  "service": "honeybadger-server",
-  "error": "Error message details"
-}
-```
+#### Scenario: Healthy response fields
+- **WHEN** the server is healthy and `GET /health` is requested
+- **THEN** the response is HTTP 200 with:
+  - `status` = `"ok"`
+  - `http_code` = `200`
+  - `service` = `"honeybadger-server"`
+  - `timestamp` as an ISO 8601 server time
+  - `uptime.seconds` as an integer and `uptime.human_readable` as `"<hours>h <minutes>m"`
+  - `statistics.total_report_directories`, `statistics.unique_hosts`,
+    `statistics.reports_by_type`
+  - `storage.location` and `storage.accessible`
 
-## Field Descriptions
+#### Scenario: Field names are a contract
+- **WHEN** the response shape changes
+- **THEN** it is treated as a breaking change for monitoring consumers
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `status` | string | `"ok"` or `"error"` |
-| `http_code` | integer | HTTP status code (200, 500) |
-| `service` | string | Always `"honeybadger-server"` |
-| `timestamp` | string | Current server time (ISO 8601 format) |
-| `uptime.seconds` | integer | Server uptime in seconds |
-| `uptime.human_readable` | string | Format: `"<hours>h <minutes>m"` |
-| `statistics.total_report_directories` | integer | Count of report directories |
-| `statistics.unique_hosts` | integer | Count of distinct hostnames |
-| `statistics.reports_by_type` | object | Count of each report type found |
-| `storage.location` | string | Configured storage path |
-| `storage.accessible` | boolean | Whether storage directory exists |
+### Requirement: Error response structure
 
-## Statistics Calculation
+A server that cannot report its health SHALL respond with HTTP 500 and a body
+containing `status`, `http_code`, `service` and `error`.
 
-### Total Report Directories
-
-Count of all subdirectories in `storage_location`.
-
-### Unique Hosts
-
-Distinct hostnames extracted from directory names (`<hostname>-<username>-<yyyymmdd>`).
-
-**Parsing logic:**
-```
-Directory: webserver01-admin-20260316
-           └─────┬─────┘ └──┬─┘ └───┬───┘
-              hostname    user    date
-```
+#### Scenario: Failure response fields
+- **WHEN** health collection fails
+- **THEN** the response is HTTP 500 with `status` = `"error"`,
+  `http_code` = `500`, `service` = `"honeybadger-server"` and `error` holding
+  the failure detail
 
 ### Requirement: Reports by Type Statistics
 
-The health endpoint SHALL return counts of each supported report type found in storage.
+The health endpoint SHALL return counts of each supported report type found in
+storage, using `fastfetch` as the system information report type.
 
 ```json
 {
   "statistics": {
     "reports_by_type": {
       "lynis": 40,
-      "neofetch": 38
+      "fastfetch": 38
     }
   }
 }
 ```
 
 #### Scenario: Report type counting
-- **WHEN** health endpoint is requested
-- **THEN** response includes counts for:
+- **WHEN** the health endpoint is requested
+- **THEN** the response includes counts for:
   - `lynis`: number of directories containing `lynis-report.json`
-  - `neofetch`: number of directories containing `neofetch-report.json`
+  - `fastfetch`: number of directories containing `fastfetch-report.json`
 
 #### Scenario: Zero reports of a type
 - **WHEN** no directories contain a specific report type
 - **THEN** that report type's count is 0 in the response
 
+#### Scenario: Legacy neofetch files not counted
+- **WHEN** a directory contains `neofetch-report.json` from an earlier client
+  generation
+- **THEN** it does not contribute to any report type count, and no `neofetch`
+  key appears in `reports_by_type`
+
 **Note:** One directory can contribute to multiple report type counts.
 
-### Storage Accessible
+### Requirement: Directory and host statistics
 
-Checks if `Path(storage_location).exists()` returns true.
+The endpoint SHALL report the number of report directories and the number of
+distinct hostnames derived from them.
 
-## Uptime Tracking
+#### Scenario: Total report directories
+- **WHEN** health is requested
+- **THEN** `statistics.total_report_directories` is the count of subdirectories
+  in the configured storage location
 
-**Start time:** Recorded in `ReportHandler.start_time` when server starts.
+#### Scenario: Unique hosts
+- **WHEN** directory names follow `<hostname>-<username>-<yyyymmdd>`
+- **THEN** `statistics.unique_hosts` is the count of distinct hostnames parsed
+  from them
 
-**Calculation:**
-```python
-uptime_seconds = current_time - start_time
-uptime_hours = uptime_seconds // 3600
-uptime_minutes = (uptime_seconds % 3600) // 60
-```
+### Requirement: Uptime tracking
 
-**Note:** Uptime resets on server restart (no persistence).
+The endpoint SHALL report uptime measured from server start, without
+persistence across restarts.
 
-## Use Cases
+#### Scenario: Uptime reported
+- **WHEN** the server has been running for one hour
+- **THEN** `uptime.seconds` is approximately 3600 and `uptime.human_readable`
+  is `"1h 0m"`
 
-### Monitoring Systems
+#### Scenario: Uptime resets on restart
+- **WHEN** the server restarts
+- **THEN** uptime restarts from zero
 
-**Prometheus:**
-```yaml
-scrape_configs:
-  - job_name: 'honeybadger'
-    static_configs:
-      - targets: ['localhost:7123']
-    metrics_path: '/health'
-```
+### Requirement: Storage accessibility
 
-**Nagios/Icinga:**
-```bash
-check_http -H localhost -p 7123 -u /health -s '"status":"ok"'
-```
+The endpoint SHALL report whether the configured storage location exists.
 
-### Healthcheck Scripts
+#### Scenario: Storage present
+- **WHEN** the configured storage location exists
+- **THEN** `storage.accessible` is true and `storage.location` is the
+  configured path
 
-```bash
-#!/bin/bash
-response=$(curl -s http://localhost:7123/health)
-status=$(echo "$response" | jq -r '.status')
-
-if [ "$status" = "ok" ]; then
-  echo "OK - Honeybadger server is healthy"
-  exit 0
-else
-  echo "CRITICAL - Honeybadger server error"
-  exit 2
-fi
-```
-
-### Container Orchestration
-
-**Docker Compose:**
-```yaml
-healthcheck:
-  test: ["CMD", "curl", "-f", "http://localhost:7123/health"]
-  interval: 30s
-  timeout: 5s
-  retries: 3
-```
-
-**Kubernetes:**
-```yaml
-livenessProbe:
-  httpGet:
-    path: /health
-    port: 7123
-  initialDelaySeconds: 10
-  periodSeconds: 30
-```
-
-## Implementation Location
-
-- Handler: `honeybadger_server.py:do_GET()` (line 732)
-- Status generation: `get_health_status()` (line 104)
-- Start time init: `run_server()` (line 799)
-
-## Performance
-
-- **Response time:** ~5-50ms depending on report count
-- **No caching:** Stats calculated on every request
-- **I/O operations:** Scans filesystem on each call
-
-## Limitations
-
-- No authentication (publicly accessible)
-- No detailed error diagnostics
-- No historical metrics
-- Uptime not persisted across restarts
-- No alerting thresholds
-
-## Future Enhancements
-
-- Prometheus-native `/metrics` endpoint
-- Configurable alert thresholds
-- Historical uptime tracking
-- Detailed error states (disk full, permissions, etc.)
-- Response time percentiles
-- Authentication/API keys
+#### Scenario: Storage missing
+- **WHEN** the configured storage location does not exist
+- **THEN** `storage.accessible` is false
