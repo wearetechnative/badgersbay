@@ -10,6 +10,15 @@ compliance:
   # Example: [3, 9] = March and September
   audit_months: [3, 9]
 
+  # Asset register: the list of systems expected to report, exported from the
+  # ISO compliance sheet. Without it the server still accepts submissions but
+  # cannot say which systems are missing.
+  asset_register: ./assets.csv
+
+  # Weeks past the audit month during which a submission still counts toward
+  # the round, and during which an asset entering scope still belongs to it.
+  grace_weeks: 4
+
   # Required reports for a complete set
   required_reports:
     # Always required

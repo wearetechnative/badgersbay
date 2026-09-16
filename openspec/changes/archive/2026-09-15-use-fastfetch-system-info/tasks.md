@@ -52,7 +52,7 @@
 ## 7. Data move (conflict-free part only)
 
 - [x] 7.1 `mv reports/2026-09/future-test-testuser reports/2026-03/`
-      (`reports/` is gitignored, dus git mv is niet van toepassing)
+      (`reports/` is gitignored, so git mv does not apply)
 - [x] 7.2 Confirm `reports/2026-09/` is empty and removed
 - [x] 7.3 Do NOT touch the three legacy `*-2026MMDD` directories — see design
 

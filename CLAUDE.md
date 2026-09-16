@@ -138,12 +138,22 @@ The server supports flexible configuration file location via CLI arguments:
 
 ```
 ./reports/
-  └── <hostname>-<username>-<yyyymmdd>/
-      ├── lynis-report.json
-      ├── trivy-report.json
-      ├── vulnix-report.json
-      └── fastfetch-report.json
+  submissions/<SERIAL>/<YYYY-MM-DDTHH-MM-SS>/
+      honeybadger-<stamp>.tar.gz
+      fastfetch-report.json
+      lynis-report.json
+      submission.json
+  unmatched/<hostname>-<username>/<timestamp>/
+  <YYYY-MM>/                 archive of the pre-serial layout, read-only
 ```
+
+**Key:** the hardware serial, read from `hardware-serial.txt` in the archive.
+`asset_id` is the durable identity; a serial is how a submission finds it, and
+one asset may have several over its life.
+
+**No audit period in any path.** It is computed from the submission timestamp.
+
+**Never overwritten.** Two scans of one machine in one round both survive.
 
 **Example:** `webserver01-admin-20260316/`
 
@@ -367,7 +377,6 @@ pip install -r requirements.txt
 
 ## Current Limitations
 
-- **No authentication** - Anyone on network can POST/view
 - **No TLS** - Plain HTTP only
 - **No rate limiting** - Can be flooded
 - **No retention policy** - Reports accumulate forever
@@ -379,14 +388,32 @@ These are **by design** for simplicity. If you need these, consider if the proje
 
 ## When to Refactor
 
-Consider splitting into multiple files if:
+The single-file principle has expired. It was worth keeping while the server
+was a drop box; it stopped being worth keeping once the server acquired
+authentication, an asset register, two dashboard views and a storage model with
+its own lifecycle rules. The file is around 3000 lines and three of the five
+original triggers below have already fired.
+
+The original triggers, for the record:
 - Adding >2 new report types
-- Adding authentication system
-- Adding database backend
+- Adding authentication system          (done - version 1.1.0)
+- Adding database backend               (queued - bean badgersbay-8ylz)
 - Adding API versioning
 - Team size > 2 developers
 
-Otherwise, maintain single-file simplicity.
+Split along the seams the code already has rather than by line count:
+
+| Module | Contains |
+|--------------|-------------------------------------------------------|
+| register | AssetRegister, serial normalisation, owner slugs |
+| periods | audit period, round windows, on-time classification |
+| storage | submission records, evidence serving |
+| index | ComplianceCache, round state computation |
+| views | round view, fleet view, legacy dashboard |
+| server | config, auth, routing |
+
+Do it when the next change would otherwise add a sixth concern to the file, not
+as a project of its own.
 
 ## Related Projects
 
@@ -409,7 +436,7 @@ When proposing changes, consider:
 - Issues: https://github.com/wearetechnative/toortools (if public)
 - Specs: See `openspec/specs/` for detailed capability docs
 - Bugfixes: See `BUGFIXES.md` for documented bug fixes and their resolutions
-- Code: Read `honeybadger_server.py` - it's only 2186 lines!
+- Code: Read `honeybadger_server.py` - around 3000 lines
 
 ## Git Commit Guidelines
 

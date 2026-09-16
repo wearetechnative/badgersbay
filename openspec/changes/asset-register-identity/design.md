@@ -30,6 +30,51 @@ A submission whose serial is not in the register is stored under
 accepted. That is a feature: it catches a new asset, an out-of-scope department,
 or a register error.
 
+### A serial is often missing, and that is a state, not an error
+
+Measured across all 22 archives on compute2-prod: five systems carry a usable
+serial, and the rest do not.
+
+    FRANMDCPA750850030  lego2-pim                  usable
+    PF50L2MR            lobos-wtoorren             usable
+    FRANDGCPA5530200H9  Jeroen-jeroen              usable
+    PF50L2ML            mathijs-p16s-mathijs       usable
+    MP1Y69AC            pankhuri-... (3 archives)  usable
+
+    Not available       SammyMBPro-Sammy
+    Not available       technative-casper-casper   (4 archives)
+    Not available       nixos-pankhurip            (4 archives)
+    "Mac OS X<TAB>"     MBP-van-pim-pim
+
+`dmidecode -s system-serial-number` needs root; without it the Linux client
+writes the literal string `Not available` (bean honeybadger-wgct). The macOS client
+writes a fragment of unrelated output (bean honeybadger-nt8k). A virtual machine
+may legitimately have no serial at all.
+
+So the system must be designed for a missing serial rather than assuming one.
+A submission without a usable serial is stored, surfaced, and counted as a
+problem to fix — never discarded and never silently attributed.
+
+**A usable serial** is a single non-empty token containing no whitespace and
+matching no known placeholder (`Not available`, `Not available (VM or unknown
+hardware)`, `To Be Filled`, `O.E.M.`, `Default string`, `System Serial Number`,
+all-zeroes). Everything else counts as absent.
+
+### Two ways a submission fails to resolve, and they need different fixes
+
+    no_serial                 the archive carries no usable serial
+                              -> a client problem: the audit ran without root,
+                                 or the platform writes the wrong field
+
+    serial_not_in_register    a usable serial that the register does not know
+                              -> a register problem: a new asset, an
+                                 out-of-scope department, or a wrong column D
+
+Both land in `reports/unmatched/<hostname>-<username>/<timestamp>/` — one tree,
+not two — and the record carries which of the two it was. The dashboard keeps
+them apart, because telling someone to fix their spreadsheet when their laptop
+never reported a serial wastes everyone's time.
+
 ### The register is not yet clean
 
 Before the serial can be trusted as a join key, column D of
@@ -38,6 +83,11 @@ Before the serial can be trusted as a join key, column D of
 | Asset      | Owner     | Register says | Client measures |
 |------------|-----------|---------------|-----------------|
 | TARI-00031 | Elma Aker | `AC06CMEP`    | `YD063JGA`      |
+
+Pankhuri Prakash measured `MP1Y69AC` where the register holds `PF3NFHJL`. That
+one is not an error: the asset was replaced. It is the case the multi-serial
+design exists for — two rows under one `asset_id`, each with its own validity
+window, and a continuous history across the swap.
 
 `AC06CMEP` is the random suffix of the Windows hostname `LAPTOP-AC06CMEP`, not a
 BIOS serial — most likely transcribed from the neofetch banner. `TARI-00034`
@@ -110,7 +160,7 @@ name was used as a requirement name, and it broke again the moment a platform
 arrived with a different tool.
 
 Windows cannot satisfy this yet — `AUDIT.ps1` writes ASCII art rather than
-`fastfetch.json`, and does not submit at all. Until `wtoorren-cikq` lands, those
+`fastfetch.json`, and does not submit at all. Until `honeybadger-k80g` lands, those
 two assets are reported as `manual` rather than as incomplete.
 
 ## Decision: two views, one index
@@ -133,7 +183,7 @@ No Grafana. Both views are rendered by the server.
 `honeybadger_server.py` is 2186 lines. `CLAUDE.md` still describes it as 837 and
 lists "adding an authentication system" and "adding a database backend" as
 triggers to split the file; the first has already happened and the second is
-queued as `wtoorren-634y`. This change adds a register loader and a second
+queued as `badgersbay-8ylz`. This change adds a register loader and a second
 dashboard view. The single-file principle has effectively expired and should be
 retired deliberately here rather than eroded further in silence.
 

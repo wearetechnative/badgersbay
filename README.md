@@ -159,6 +159,104 @@ curl -X POST http://server:7123/submit-tar \
 {"error": "Invalid Authorization header format. Expected: Bearer <token>"}
 ```
 
+## Asset Register
+
+The register is the denominator compliance is measured against. Without it the
+dashboard can show what arrived but never which systems are missing - and an
+asset that never reports is exactly what an audit needs to surface.
+
+Export the `Active Assets` sheet from the ISO compliance workbook to CSV and
+point `compliance.asset_register` at it. See `assets.csv.example`.
+
+```csv
+asset_id,serial,owner,model,class,status,owner_since,valid_from,valid_to,departure_reason
+TARI-00023,PF50L2MR,Wouter van der Toorren,LENOVO 21K9CTO1WW,linux,active,2024-01-01,2024-01-01,,
+```
+
+| Column | Meaning |
+|--------------------|-----------------------------------------------------------|
+| `asset_id` | Durable identity, as held in the ISO register |
+| `serial` | Hardware serial; the key an incoming submission matches on |
+| `owner` | Person responsible; drives the call list and file naming |
+| `class` | `linux`, `macos` or `windows`; decides what a complete set is |
+| `status` | `active` or `retired`; retired is excluded from the count |
+| `owner_since` | Evidence older than this predates the current holder |
+| `valid_from` | When this serial entered scope |
+| `valid_to` | When it left; blank means still in scope |
+| `departure_reason` | Why it left. A departure without one is reported, not subtracted |
+
+An asset may hold several serials over its life. Give each its own row with its
+own validity window, and the history stays continuous across a replacement:
+
+```csv
+TARI-00037,PF3NFHJL,Pankhuri Prakash,Ideapad 3,linux,active,2024-01-01,2024-01-01,2026-08-01,replaced
+TARI-00037,MP1Y69AC,Pankhuri Prakash,IdeaPad 5,linux,active,2026-08-01,2026-08-01,,
+```
+
+The register contains names paired with hardware serials. Keep it out of the
+repository - `assets.csv` is gitignored, and in production it is delivered as
+an agenix secret.
+
+### Validation
+
+The server refuses to start on a register it cannot trust: a duplicate active
+serial, an unknown class or status, an unparseable date, or two rows claiming
+one serial for overlapping periods. A compliance figure built on an ambiguous
+register is worse than no figure. An absent register is not an error - the
+server still accepts submissions, it just cannot report who is missing.
+
+## Storage Layout
+
+A submission is the unit: one upload, one moment, stored under the hardware
+serial that identifies the asset.
+
+```
+reports/
+  submissions/PF50L2MR/2026-09-15T13-25-34/
+      honeybadger-20260915-132534.tar.gz   the archive, kept whole
+      fastfetch-report.json                extracted
+      lynis-report.json                    extracted
+      submission.json                      what this submission was
+  unmatched/<hostname>-<username>/<timestamp>/
+  2026-03/                                 archive of the pre-serial layout
+```
+
+Records are never overwritten, so two scans of one machine in the same round
+both survive. No audit period appears in any path: the period is computed from
+the timestamp, so changing `audit_months` reclassifies history instead of
+leaving directory names that quietly mean something else.
+
+A submission that cannot be attributed is stored, never rejected. The two ways
+that happens need different fixes and are reported separately: `no_serial` is a
+client problem, `serial_not_in_register` is a register problem.
+
+## Audit Rounds
+
+A round opens in its audit month and stays open until the next begins. A
+submission belongs to the most recent audit month at or before its date -
+scanning a fleet takes weeks, and a round that ran into the following month
+keeps its late submissions rather than filing them into one that has not
+started.
+
+Each round has two windows. The **scan window** is the audit month plus
+`grace_weeks`: it decides which assets belong to the round and whether a
+submission is on time. The **coverage window** runs until the next round opens
+and is the period the round makes a statement about.
+
+Assets fall into five states, kept apart on purpose:
+
+| State | Meaning |
+|---------------|--------------------------------------------------------|
+| scanned | A submission exists for this round |
+| accounted for | Left scope during the round, with a reason recorded |
+| outstanding | In scope, nothing received |
+| unexplained | Left scope with no reason given |
+| manual | Client cannot submit yet (Windows) |
+
+Accounted-for is not scanned. Folding the two together would merge "we hold
+evidence" with "we hold an excuse", and the deviation count is what the ISO
+tool needs as its own figure.
+
 ## Dashboard Access
 
 ### Browser Access
