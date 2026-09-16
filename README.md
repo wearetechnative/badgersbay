@@ -205,6 +205,37 @@ one serial for overlapping periods. A compliance figure built on an ambiguous
 register is worse than no figure. An absent register is not an error - the
 server still accepts submissions, it just cannot report who is missing.
 
+## Accounting for an Asset That Cannot Be Scanned
+
+An asset that cannot be scanned in a round is a deviation, justified in the ISO
+tool. This server does not hold that justification - it records that one exists,
+so the round can close instead of showing a permanently red row nobody can act
+on.
+
+On the round view, each outstanding row carries a control: a required reason,
+your name, and a button. The asset moves to **accounted for**, which is counted
+separately from **scanned**:
+
+```
+8 scanned · 2 accounted for · 1 outstanding
+```
+
+Not `10 / 11 OK`. Folding the two together would merge "we hold evidence" with
+"we hold an excuse", and the deviation count is what the ISO tool needs as its
+own figure. The round is closeable when nothing is outstanding.
+
+Exceptions are keyed on asset and round, stored under
+`reports/exceptions/<period>/<asset_id>.json`. An asset unreachable in September
+may be perfectly reachable in March, so nothing carries over when the next round
+opens and nothing needs clearing.
+
+**A submission always wins.** If an accounted-for asset submits after all, the
+submission counts and the exception lapses without anyone withdrawing it.
+
+The dashboard uses a single shared password, so the name recorded is what the
+operator typed. It is shown as self-reported and must not be read as an
+authenticated identity.
+
 ## Storage Layout
 
 A submission is the unit: one upload, one moment, stored under the hardware

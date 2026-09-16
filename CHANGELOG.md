@@ -8,6 +8,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Accounting for an asset that cannot be scanned.** A control on each
+  outstanding row records a reason, and the asset moves to a third category:
+  `scanned / accounted for / outstanding`. Counting an accounted-for asset as
+  scanned would fold "we hold evidence" together with "we hold an excuse", and
+  the deviation count is what the ISO tool needs as its own figure.
+  - Keyed on asset and round, so nothing carries over when the next round opens
+  - A submission always wins: if the asset submits after all, the exception
+    lapses without anyone withdrawing it
+  - Stored beside the reports, so it survives a restart and can be handed to an
+    auditor
+  - The name recorded is self-reported and labelled as such; the dashboard uses
+    one shared password
+- **`--asset-register PATH`** overrides the register named in the config file,
+  so a deployment can point at an agenix secret without editing the generated
+  config.
+- **Disappeared assets are reported.** The previously loaded register is
+  remembered, and an asset that vanishes from a later one is named on the
+  dashboard. A filtered or truncated export silently raises the coverage rate,
+  which is the one direction a compliance figure must never move by accident.
+  The server still starts: taking the portal down mid-round because two laptops
+  were retired is worse than the risk.
+
+### Added
+
 - **Report extraction from tar archives**: `POST /submit-tar` now reads the
   reports out of the archive instead of only filing it away
   - Recognised JSON members are stored next to the archive under their normal
