@@ -37,29 +37,51 @@ The system SHALL define a complete report set as containing all mandatory report
 
 ### Requirement: Configure required reports
 
-The system SHALL allow configuration of required reports via config.yaml, using
-`fastfetch` as the system information report type.
+The system SHALL define required reports by requirement name and platform
+class, not by tool name.
 
 #### Scenario: Configure mandatory reports
-- **WHEN** config.yaml contains `compliance.required_reports.mandatory: [fastfetch, lynis]`
-- **THEN** both fastfetch and lynis are required for all systems
+- **WHEN** config.yaml configures the mandatory requirements for a platform
+  class
+- **THEN** those requirements are required for every asset of that class
 
 #### Scenario: Configure one-of scanner requirement
-- **WHEN** config.yaml contains a non-empty `compliance.required_reports.one_of`
-- **THEN** at least one of the listed report types is required
+- **WHEN** a platform class configures a non-empty `one_of` list
+- **THEN** at least one of the listed requirements must be satisfied
 
 #### Scenario: Default configuration
-- **WHEN** the `compliance.required_reports` section is not specified
-- **THEN** the system defaults to mandatory `[fastfetch, lynis]` and one_of `[]`
+- **WHEN** no per-class configuration is given
+- **THEN** the system defaults to `sysinfo` and `hardening` as mandatory for
+  every class
+
+#### Scenario: Linux and macOS requirements
+- **WHEN** a register entry has class `linux` or `macos`
+- **THEN** a complete submission requires `sysinfo` (fastfetch.json) and
+  `hardening` (lynis-report.json)
+
+#### Scenario: Windows requirements
+- **WHEN** a register entry has class `windows`
+- **THEN** a complete submission requires `sysinfo` and `hardening`
+  (hardeningkitty.csv)
+
+#### Scenario: Class comes from the register
+- **WHEN** determining which reports a submission must contain
+- **THEN** the platform class is read from the asset register, not inferred
+  from the submission contents
+
+#### Scenario: Windows before client support exists
+- **WHEN** a register entry has class `windows` and the client cannot yet
+  submit
+- **THEN** the asset is reported as `manual` rather than incomplete
 
 #### Scenario: Missing system information report
-- **WHEN** a system directory contains `lynis-report.json` but no
-  `fastfetch-report.json`
-- **THEN** the report set is incomplete with reason "Missing fastfetch"
+- **WHEN** a submission satisfies `hardening` but carries nothing that
+  satisfies `sysinfo`
+- **THEN** the report set is incomplete with reason "Missing sysinfo"
 
 #### Scenario: Complete set
-- **WHEN** a system directory contains `fastfetch-report.json` and
-  `lynis-report.json`
+- **WHEN** a submission satisfies every mandatory requirement for its platform
+  class
 - **THEN** the report set is marked complete
 
 ### Requirement: Track completeness per audit period
