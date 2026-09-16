@@ -209,7 +209,7 @@ class ComplianceCache:
         newest = None
         for report_file in system_dir.glob('*.json'):
             name = report_file.stem.replace('-report', '')
-            if name != 'submission':
+            if name not in ('submission', 'asset-inventory'):
                 reports.append(name)
             stamp = datetime.fromtimestamp(report_file.stat().st_mtime)
             newest = stamp if newest is None or stamp > newest else newest
@@ -237,6 +237,8 @@ class ComplianceCache:
             'evidence_predates_owner': False,
             'reports': sorted(set(reports)),
             'evidence': None,
+            'inventory': None,
+            'inventory_raw': None,
         }
 
     @staticmethod
@@ -645,6 +647,117 @@ REPORT_FILENAMES = {
     'fastfetch': 'fastfetch-report.json',
     'lynis': 'lynis-report.json',
 }
+
+# The client's own summary of what its reports say. It is stored like a report
+# but is not one: it describes the audit rather than being part of it, so it
+# never enters the requirement set. An older client that sends none must not
+# become incomplete for a reason its owner cannot act on.
+ASSET_INVENTORY_FILENAME = 'asset-inventory.json'
+
+# The schema generation this server was written against. A document declaring
+# anything else is stored whole and rendered for the fields that are present:
+# the client runs ahead of the server, and refusing would take the fleet out of
+# the dashboard on every client upgrade.
+INVENTORY_SCHEMA_VERSION = 1
+
+# The findings the fleet view has columns for, in the order it shows them.
+# A document may carry more - it already does - and those travel in the stored
+# document rather than being discarded at the door.
+INVENTORY_COLUMNS = (
+    ('disk_encryption', 'Disk encryption'),
+    ('screen_lock', 'Screen lock'),
+    ('firewall', 'Firewall'),
+    ('hardening_score', 'Hardening'),
+    ('os_uptodate', 'OS current'),
+)
+
+
+def parse_asset_inventory(document):
+    """Reduce an inventory document to what the record keeps.
+
+    Returns None for anything that is not a usable inventory, so a client
+    generation the server cannot make sense of is skipped rather than fatal.
+    Every finding the document carries is kept, not only the modelled ones:
+    the columns are this server's choice, the document is the client's.
+
+    Examples:
+        >>> doc = {'schema_version': 1, 'generated_at': '2026-09-16T11:10:06+02:00',
+        ...        'platform': 'linux', 'scan_date': '2026-09-15 23:31:17',
+        ...        'findings': {'firewall': {'value': 'Yes', 'finding': 'Yes'}}}
+        >>> parse_asset_inventory(doc)['findings']['firewall']['value']
+        'Yes'
+        >>> parse_asset_inventory(doc)['schema_version']
+        1
+        >>> parse_asset_inventory({'schema_version': 7, 'findings': {}})['schema_version']
+        7
+        >>> parse_asset_inventory({'findings': 'not a mapping'}) is None
+        True
+        >>> parse_asset_inventory([]) is None
+        True
+    """
+    if not isinstance(document, dict):
+        return None
+    findings = document.get('findings')
+    if not isinstance(findings, dict):
+        return None
+
+    kept = {}
+    for name, finding in findings.items():
+        if isinstance(finding, dict):
+            kept[name] = dict(finding)
+        else:
+            # A generation that writes a bare value rather than a pair still
+            # says something; keep it in the shape the view reads.
+            kept[name] = {'value': finding, 'finding': None}
+
+    identity = document.get('identity')
+    return {
+        'schema_version': document.get('schema_version'),
+        'generated_at': document.get('generated_at'),
+        'honeybadger_version': document.get('honeybadger_version'),
+        'platform': document.get('platform'),
+        'scan_date': document.get('scan_date'),
+        'model': identity.get('model') if isinstance(identity, dict) else None,
+        'findings': kept,
+    }
+
+
+def inventory_cell(inventory, field):
+    """What the fleet view shows for one finding, and why.
+
+    Returns (text, reason, known). `known` is False when there is no value to
+    report - no inventory at all, a field this generation does not carry, or a
+    value the client deliberately declined to assert. The three are different
+    situations but the same answer: unknown, with whatever reason is on hand.
+
+    Examples:
+        >>> inv = {'findings': {'firewall': {'value': 'Yes', 'finding': 'Yes (ufw)'},
+        ...                     'hardening_score': {'value': 72, 'finding': '72/100'},
+        ...                     'screen_lock': {'value': None, 'finding': 'niet vastgesteld'}}}
+        >>> inventory_cell(inv, 'firewall')
+        ('Yes', 'Yes (ufw)', True)
+        >>> inventory_cell(inv, 'hardening_score')
+        ('72', '72/100', True)
+        >>> inventory_cell(inv, 'screen_lock')
+        ('unknown', 'niet vastgesteld', False)
+        >>> inventory_cell(inv, 'os_uptodate')
+        ('unknown', '', False)
+        >>> inventory_cell(None, 'firewall')
+        ('unknown', '', False)
+    """
+    findings = (inventory or {}).get('findings') or {}
+    finding = findings.get(field)
+    if not isinstance(finding, dict):
+        return 'unknown', '', False
+
+    reason = finding.get('finding') or ''
+    value = finding.get('value')
+    if value is None or value == '':
+        return 'unknown', reason, False
+    if isinstance(value, bool):
+        value = 'Yes' if value else 'No'
+    return str(value), reason, True
+
 
 # What a complete submission requires, named after the requirement rather than
 # the tool that satisfies it. Naming a requirement after a tool is what broke
@@ -1442,6 +1555,11 @@ class ReportHandler(BaseHTTPRequestHandler):
         # Extract just the filename without path
         basename = os.path.basename(filename).lower()
 
+        # The asset inventory is a summary of the reports, not a report. It is
+        # recognised here only so it never falls through to a pattern match.
+        if basename == ASSET_INVENTORY_FILENAME:
+            return None
+
         # Match patterns for each report type
         if 'lynis' in basename and basename.endswith('.json'):
             return 'lynis'
@@ -1518,6 +1636,8 @@ class ReportHandler(BaseHTTPRequestHandler):
                 On success: (True, {
                     'reports': [(filename, report_type, json_content), ...],
                     'unrecognised': [{'file': name, 'reason': message}, ...],
+                    'serial': str or None,
+                    'inventory': the asset inventory document, or None,
                 })
                 On failure: (False, error_message)
 
@@ -1576,7 +1696,37 @@ class ReportHandler(BaseHTTPRequestHandler):
             # Extract and process JSON files
             results = []
             unrecognised = []
+            inventory = None
             for member in json_files:
+                # The asset inventory is the client's summary of what its
+                # reports say. It is read here and carried separately: it is
+                # not a report type, so it must not reach 'reports' and must
+                # not be reported as unrecognised.
+                if os.path.basename(member.name).lower() == ASSET_INVENTORY_FILENAME:
+                    try:
+                        handle = tar.extractfile(member)
+                        inventory = json.loads(handle.read())
+                    except json.JSONDecodeError as e:
+                        # Logged and skipped. The submission is evidence
+                        # regardless, and a broken inventory is the client's
+                        # problem to fix, not a reason to refuse the archive.
+                        logger.warning(
+                            f"Malformed asset inventory in {member.name}, skipped: {e}"
+                        )
+                        unrecognised.append({
+                            'file': member.name,
+                            'reason': f"Invalid JSON: {str(e)}",
+                        })
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not read asset inventory from {member.name}: {e}"
+                        )
+                        unrecognised.append({
+                            'file': member.name,
+                            'reason': f"Error extracting file: {str(e)}",
+                        })
+                    continue
+
                 # Detect report type from filename
                 report_type = self.detect_report_type_from_filename(member.name)
                 if not report_type:
@@ -1629,6 +1779,7 @@ class ReportHandler(BaseHTTPRequestHandler):
                 'reports': results,
                 'unrecognised': unrecognised,
                 'serial': serial,
+                'inventory': inventory,
             }
 
         except Exception as e:
@@ -1903,6 +2054,7 @@ class ReportHandler(BaseHTTPRequestHandler):
             extracted_reports = extraction['reports']
             unrecognised = extraction['unrecognised']
             serial = extraction['serial']
+            inventory = extraction['inventory']
 
             # OS type comes from the archive's fastfetch report; the X-OS-Type
             # header is only a fallback for archives without one
@@ -1915,7 +2067,8 @@ class ReportHandler(BaseHTTPRequestHandler):
 
             if self.config.compliance_enabled:
                 record_dir, metadata, saved_reports = self.store_submission(
-                    hostname, username, serial, tar_data, extracted_reports, os_type
+                    hostname, username, serial, tar_data, extracted_reports, os_type,
+                    inventory=inventory
                 )
                 tar_path = record_dir / metadata['evidence']
                 audit_period = metadata['audit_period']
@@ -1935,7 +2088,8 @@ class ReportHandler(BaseHTTPRequestHandler):
                         'report_type': report_type,
                         'path': str(saved_path),
                     })
-                metadata = {'unmatched_reason': None, 'asset_id': None, 'timeliness': None}
+                metadata = {'unmatched_reason': None, 'asset_id': None, 'timeliness': None,
+                            'inventory': parse_asset_inventory(inventory)}
                 audit_period = None
 
             logger.info(f"Tar archive stored: {tar_path} ({content_length} bytes)")
@@ -1966,6 +2120,7 @@ class ReportHandler(BaseHTTPRequestHandler):
                 'timeliness': metadata.get('timeliness'),
                 'unmatched_reason': metadata.get('unmatched_reason'),
                 'reports_saved': saved_reports,
+                'inventory': bool(metadata.get('inventory')),
                 'unrecognised': unrecognised
             }
 
@@ -1998,7 +2153,8 @@ class ReportHandler(BaseHTTPRequestHandler):
         return entry, None
 
     def store_submission(self, hostname, username, serial, tar_data,
-                         extracted_reports, os_type, submitted_at=None):
+                         extracted_reports, os_type, submitted_at=None,
+                         inventory=None):
         """Write one submission as its own timestamped record.
 
         A submission is the unit: one upload, one moment, stored under the
@@ -2007,7 +2163,7 @@ class ReportHandler(BaseHTTPRequestHandler):
         survive, and the audit period is computed from the timestamp rather
         than baked into the path.
 
-        Returns (record_dir, metadata).
+        Returns (record_dir, metadata, saved_reports).
         """
         submitted_at = submitted_at or datetime.now()
         entry, unmatched_reason = self.resolve_submission(serial, submitted_at)
@@ -2045,6 +2201,28 @@ class ReportHandler(BaseHTTPRequestHandler):
                 'path': str(record_dir / filename),
             })
 
+        # The inventory is stored beside the reports so it can be downloaded
+        # from the dashboard like any other piece of evidence, and never
+        # appears in saved_reports: it is not a report and must not count
+        # toward completeness.
+        parsed_inventory = parse_asset_inventory(inventory)
+        if inventory is not None:
+            with open(record_dir / ASSET_INVENTORY_FILENAME, 'w') as handle:
+                json.dump(inventory, handle, indent=2)
+        if inventory is not None and parsed_inventory is None:
+            logger.warning(
+                f"Asset inventory in {record_dir} carries no usable findings; "
+                "stored whole, no findings recorded"
+            )
+        elif parsed_inventory is not None and \
+                parsed_inventory.get('schema_version') != INVENTORY_SCHEMA_VERSION:
+            logger.info(
+                f"Asset inventory schema_version "
+                f"{parsed_inventory.get('schema_version')!r} is not "
+                f"{INVENTORY_SCHEMA_VERSION}; stored whole and read for the "
+                "fields this server understands"
+            )
+
         # Register state is written into the record rather than joined at read
         # time. The register moves - owners change, devices are replaced - and a
         # closed round must keep reporting what was true when it was scanned.
@@ -2068,6 +2246,14 @@ class ReportHandler(BaseHTTPRequestHandler):
             'evidence_predates_owner': evidence_predates_owner,
             'reports': sorted({r['report_type'] for r in saved_reports}),
             'evidence': tar_name,
+            # The findings the client determined, denormalised for the same
+            # reason asset_id and owner are: a closed round has to keep
+            # reporting what was true when it was scanned.
+            'inventory': parsed_inventory,
+            # And the document whole, because the client emits fields this
+            # server does not model yet and will emit more. Keeping only what
+            # is modelled today would throw the rest away at the door.
+            'inventory_raw': inventory,
         }
         with open(record_dir / 'submission.json', 'w') as handle:
             json.dump(metadata, handle, indent=2)
@@ -2311,6 +2497,15 @@ class ReportHandler(BaseHTTPRequestHandler):
           min-width:150px;flex:1}
         .exc-who{min-width:90px;flex:0 0 90px}
         .exc-reason:focus{outline:2px solid var(--accent);outline-offset:-1px}
+        table.fleet{min-width:1180px}
+        thead tr.grph th{padding:7px 14px;border-bottom:1px solid var(--line-soft);
+          background:var(--surface-3);color:var(--ink-3);font-weight:600}
+        thead tr.grph th:first-child{background:var(--surface-3);border-bottom-color:transparent}
+        td.fnd,th.fnd{width:118px}
+        td.fnd{font-size:12.5px;white-space:nowrap}
+        .prov{border-bottom:1px dotted var(--line);cursor:help}
+        .sub.why{max-width:118px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+          cursor:help}
     """
 
     def _dashboard_shell(self, title, active_tab, period, body):
@@ -2677,6 +2872,7 @@ class ReportHandler(BaseHTTPRequestHandler):
                     css = 's-open'
 
             status = 'retired' if entry['status'] == 'retired' else html_escape(entry['class'])
+            findings = self._inventory_cells(record.get('inventory') if record else None)
             rows.append(f"""
             <tr class="{css}">
               <td class="mono"><strong>{html_escape(entry['asset_id'])}</strong></td>
@@ -2685,23 +2881,64 @@ class ReportHandler(BaseHTTPRequestHandler):
               <td>{os_type}</td>
               <td class="mono">{when}</td>
               <td>{freshness}</td>
+              {findings}
             </tr>""")
 
+        span = len(INVENTORY_COLUMNS)
+        finding_heads = ''.join(
+            f'<th class="fnd">{html_escape(label)}</th>' for _, label in INVENTORY_COLUMNS
+        )
         table = f"""
-  <div class="tblwrap"><table>
-    <thead><tr><th style="width:104px">Asset</th><th>Owner</th><th style="width:78px">Class</th>
-      <th style="width:200px">Operating system</th><th style="width:104px">Last seen</th>
-      <th style="width:150px">Coverage</th></tr></thead>
-    <tbody>{''.join(rows) or '<tr><td colspan="6" class="empty">Register is empty</td></tr>'}</tbody>
+  <div class="tblwrap"><table class="fleet">
+    <thead>
+      <tr class="grph"><th colspan="6"></th>
+        <th colspan="{span}">Audit findings &#183; as reported by the client</th></tr>
+      <tr><th style="width:104px">Asset</th><th>Owner</th><th style="width:78px">Class</th>
+      <th style="width:180px">Operating system</th><th style="width:104px">Last seen</th>
+      <th style="width:150px">Coverage</th>{finding_heads}</tr>
+    </thead>
+    <tbody>{''.join(rows) or f'<tr><td colspan="{6 + span}" class="empty">Register is empty</td></tr>'}</tbody>
   </table></div>
   <div class="legend">
     <span><span class="chip d-fresh"><i></i>current round</span></span>
     <span><span class="chip d-prev"><i></i>previous round only</span></span>
     <span><span class="chip d-stale"><i></i>older, or never</span></span>
-    <span>Disk encryption, screen lock, firewall and hardening score arrive with
-      asset-inventory.json from the client.</span>
+    <span>Findings come from <span class="mono">asset-inventory.json</span> in the
+      asset's most recent submission. Hover a value for the finding it was
+      derived from. <span class="dash">unknown</span> means the client sent no
+      inventory, or declined to assert the value - not that the asset failed.
+      The values carry no verdict of their own: the threshold belongs to the
+      ISO process.</span>
   </div>"""
         return self._dashboard_shell('Badgersbay Fleet', 'fleet', period, table)
+
+    @staticmethod
+    def _inventory_cells(inventory):
+        """Render one row's finding columns.
+
+        No cell is coloured as pass or fail. Whether a hardening score of 62 is
+        acceptable is a threshold the ISO process owns, and a dashboard that
+        answers it here would be making that call on the process's behalf.
+        """
+        cells = []
+        for field, _ in INVENTORY_COLUMNS:
+            text, reason, known = inventory_cell(inventory, field)
+            title = f' title="{html_escape(reason)}"' if reason else ''
+            if known:
+                cells.append(
+                    f'<td class="fnd"><span class="prov"{title}>'
+                    f'{html_escape(text)}</span></td>'
+                )
+            elif reason:
+                # A value the client declined to assert. The refusal is
+                # information, so the reason is shown rather than left blank.
+                cells.append(
+                    f'<td class="fnd"><span class="dash">unknown</span>'
+                    f'<span class="sub why"{title}>{html_escape(reason)}</span></td>'
+                )
+            else:
+                cells.append('<td class="fnd"><span class="dash">unknown</span></td>')
+        return ''.join(cells)
 
     def generate_compliance_dashboard_html(self, selected_period=None):
         """Generate compliance dashboard HTML"""

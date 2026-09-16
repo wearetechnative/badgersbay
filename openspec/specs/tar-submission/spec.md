@@ -33,12 +33,24 @@ store the archive whole, unchanged, regardless of what it extracts from it.
 ### Requirement: Extract recognised reports from the archive
 
 The server SHALL extract JSON members whose report type it recognises and SHALL
-store each through the normal report storage path, alongside the archive.
+store each through the normal report storage path, alongside the archive. It
+SHALL also extract the asset inventory, which is a summary of those reports
+rather than a report itself.
 
 #### Scenario: Reports extracted and stored
 - **WHEN** an archive contains `fastfetch.json` and `lynis-report.json`
 - **THEN** both are stored as `fastfetch-report.json` and `lynis-report.json`
   in the same directory as the archive
+
+#### Scenario: Asset inventory extracted
+- **WHEN** an archive contains `asset-inventory.json`
+- **THEN** it is stored in the submission record and is not reported as an
+  unrecognised member
+
+#### Scenario: The inventory is not a report type
+- **WHEN** an archive carries an asset inventory
+- **THEN** it does not contribute to completeness, and its absence is not a
+  missing requirement
 
 #### Scenario: Completeness reflects contents
 - **WHEN** an archive containing a complete report set is submitted

@@ -142,6 +142,7 @@ The server supports flexible configuration file location via CLI arguments:
       honeybadger-<stamp>.tar.gz
       fastfetch-report.json
       lynis-report.json
+      asset-inventory.json
       submission.json
   unmatched/<hostname>-<username>/<timestamp>/
   <YYYY-MM>/                 archive of the pre-serial layout, read-only
@@ -158,6 +159,19 @@ one asset may have several over its life.
 **Example:** `webserver01-admin-20260316/`
 
 **Overwrite behavior:** Same-day reports overwrite. Different dates create new directories.
+
+**The record carries the audit's findings.** `submission.json` holds `inventory`
+(the findings the client determined, parsed by `parse_asset_inventory()`) and
+`inventory_raw` (the document whole, so fields no column shows are not lost).
+The findings are denormalised for the same reason `asset_id` and `owner` are: a
+closed round has to keep reporting what was true when it was scanned.
+
+`asset-inventory.json` is a summary of the reports, not a report type. It is
+recognised by filename in `extract_and_validate_tar()`, carried separately from
+`reports`, and never reaches `evaluate_completeness()` - a client that sends
+none must not become incomplete for a reason its owner cannot act on. The fleet
+view renders it through `INVENTORY_COLUMNS` and `inventory_cell()`, and adds no
+colour judgement: the threshold belongs to the ISO process, not the dashboard.
 
 ## Authentication
 
@@ -290,6 +304,11 @@ DASHBOARD_PASSWORD = ""      # Single password for dashboard
 
 ### Adding a new report type
 
+First check it is a report. Something that summarises the reports rather than
+being one of them - `asset-inventory.json` is the existing case - is recognised
+by filename and carried outside `reports`, so it never enters the requirement
+set.
+
 1. Add to `valid_types` list (line 61)
 2. Add validation logic in `validate_report_structure()` (line 66)
 3. Add filename mapping in `save_report()` (line 236)
@@ -335,6 +354,13 @@ New endpoint for submitting multiple reports at once:
 ## Testing
 
 ```bash
+# Unit and end-to-end tests. Each starts a real server on an ephemeral port
+# against a throwaway storage tree and submits a real client archive over HTTP.
+python3 -m unittest test_asset_inventory -v
+
+# The pure functions carry doctests
+python3 -m doctest honeybadger_server.py -v
+
 # Quick test with sample data (single reports)
 ./test.sh
 

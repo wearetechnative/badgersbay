@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-16T11:10:06+02:00",
+  "honeybadger_version": "0.4.1",
+  "platform": "linux",
+  "scan_date": "2026-09-15 23:31:17",
+  "identity": {
+    "serial": "PF50L2MR",
+    "hostname": "lobos",
+    "username": "wtoorren",
+    "model": "21K9CTO1WW (ThinkPad P16s Gen 2)"
+  },
+  "findings": {
+    "os": {
+      "value": "NixOS 26.05 (Yarara)",
+      "finding": "NixOS 26.05 (Yarara)"
+    },
+    "disk_encryption": {
+      "value": "Yes",
+      "finding": "Yes (LUKS)"
+    },
+    "screen_lock": {
+      "value": "Yes",
+      "finding": "Yes (auto-lock: 5 minutes)"
+    },
+    "firewall": {
+      "value": "Yes",
+      "finding": "Yes"
+    },
+    "vulnerable_packages": {
+      "value": null,
+      "finding": "niet vastgesteld - geen package audit tool aanwezig"
+    },
+    "hardening_score": {
+      "value": 72,
+      "finding": "72/100 - drempel >=65 gehaald",
+      "tool": "lynis"
+    },
+    "os_uptodate": {
+      "value": "Yes",
+      "finding": "WARNING - supported, upgrade aanbevolen"
+    }
+  }
+}
