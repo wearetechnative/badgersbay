@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **The vulnerable package count is shown.** The client counts vulnerable
+  packages but deliberately asserts no verdict on them, because the asset
+  register contradicts itself about which literal in column J means compliant.
+  The count used to survive only inside a Dutch sentence; it is now a column.
+  - A sixth column, **Vulnerable pkgs**, in the **All assets** view
+  - A finding that measures without judging reports its number, stated
+    generally rather than as a case for this one field, so the next finding of
+    that shape needs no new branch
+  - No colour is applied. The threshold belongs to the ISO process, and a
+    server that invented the verdict the client declined to give would be
+    asserting something nobody can stand behind
+
 - **The audit's findings are read and shown.** The client has determined disk
   encryption, screen lock, firewall, hardening score and OS currency all along
   and shipped them in `asset-inventory.json`; the server stored the file and
@@ -48,6 +60,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   which is the one direction a compliance figure must never move by accident.
   The server still starts: taking the portal down mid-round because two laptops
   were retired is worse than the risk.
+
+### Changed
+
+- **The inventory generation the server is written against is now 2.** The
+  client raised `asset-inventory.json` to schema 2 to carry the count. An
+  unrecognised generation is still stored whole and rendered for what is
+  understood - refusing would take the fleet out of the dashboard on every
+  client upgrade.
 
 ### Fixed
 

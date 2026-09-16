@@ -658,7 +658,7 @@ ASSET_INVENTORY_FILENAME = 'asset-inventory.json'
 # anything else is stored whole and rendered for the fields that are present:
 # the client runs ahead of the server, and refusing would take the fleet out of
 # the dashboard on every client upgrade.
-INVENTORY_SCHEMA_VERSION = 1
+INVENTORY_SCHEMA_VERSION = 2
 
 # The findings the fleet view has columns for, in the order it shows them.
 # A document may carry more - it already does - and those travel in the stored
@@ -669,6 +669,7 @@ INVENTORY_COLUMNS = (
     ('firewall', 'Firewall'),
     ('hardening_score', 'Hardening'),
     ('os_uptodate', 'OS current'),
+    ('vulnerable_packages', 'Vulnerable pkgs'),
 )
 
 
@@ -730,6 +731,12 @@ def inventory_cell(inventory, field):
     value the client deliberately declined to assert. The three are different
     situations but the same answer: unknown, with whatever reason is on hand.
 
+    A finding may measure without judging. The client counts vulnerable packages
+    but asserts no value for them, because the register contradicts itself about
+    which literal means compliant. A count is still a measurement, so it is
+    reported when there is no value - with the client's reason, and no verdict
+    of this server's own.
+
     Examples:
         >>> inv = {'findings': {'firewall': {'value': 'Yes', 'finding': 'Yes (ufw)'},
         ...                     'hardening_score': {'value': 72, 'finding': '72/100'},
@@ -744,6 +751,28 @@ def inventory_cell(inventory, field):
         ('unknown', '', False)
         >>> inventory_cell(None, 'firewall')
         ('unknown', '', False)
+
+        A measurement the client declined to judge still reports its number:
+
+        >>> counted = {'findings': {'vulnerable_packages': {
+        ...     'value': None, 'count': 3,
+        ...     'finding': '3 kwetsbare packages gevonden'}}}
+        >>> inventory_cell(counted, 'vulnerable_packages')
+        ('3', '3 kwetsbare packages gevonden', True)
+
+        Zero is a measurement too, not an absence:
+
+        >>> none_found = {'findings': {'vulnerable_packages': {
+        ...     'value': None, 'count': 0, 'finding': 'geen gevonden'}}}
+        >>> inventory_cell(none_found, 'vulnerable_packages')
+        ('0', 'geen gevonden', True)
+
+        A finding with neither reads as unknown, as before:
+
+        >>> undetermined = {'findings': {'vulnerable_packages': {
+        ...     'value': None, 'finding': 'geen package audit tool aanwezig'}}}
+        >>> inventory_cell(undetermined, 'vulnerable_packages')
+        ('unknown', 'geen package audit tool aanwezig', False)
     """
     findings = (inventory or {}).get('findings') or {}
     finding = findings.get(field)
@@ -753,6 +782,12 @@ def inventory_cell(inventory, field):
     reason = finding.get('finding') or ''
     value = finding.get('value')
     if value is None or value == '':
+        # A count without a value is a finding that measured without judging.
+        # Stated generally rather than as a case for one field: the next
+        # finding of that shape should not need its own branch here.
+        count = finding.get('count')
+        if isinstance(count, int) and not isinstance(count, bool):
+            return str(count), reason, True
         return 'unknown', reason, False
     if isinstance(value, bool):
         value = 'Yes' if value else 'No'

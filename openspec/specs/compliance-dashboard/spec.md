@@ -232,10 +232,17 @@ can be read off rather than reconstructed by hand.
 #### Scenario: Findings shown
 - **WHEN** an asset's latest submission carries an inventory
 - **THEN** the row shows disk encryption, screen lock, firewall, hardening
-  score and OS up-to-date
+  score, OS up-to-date and vulnerable packages
+
+#### Scenario: A measurement without a verdict
+- **WHEN** a finding carries a null value and a count, as the client emits for
+  vulnerable packages because the register contradicts itself about which
+  literal means compliant
+- **THEN** the cell shows the count and the client's reason, and is treated as
+  known
 
 #### Scenario: A declined value reads as unknown with its reason
-- **WHEN** a finding carries a null value and a populated finding text
+- **WHEN** a finding carries a null value, no count and a populated finding text
 - **THEN** the cell reads as unknown and the client's reason is available on
   the row
 

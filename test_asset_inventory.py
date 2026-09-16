@@ -198,7 +198,12 @@ class TestRealArchive(ServerHarness):
         record = self.only_record()
 
         inventory = record['inventory']
-        self.assertEqual(inventory['schema_version'], hb.INVENTORY_SCHEMA_VERSION)
+        # The captured archive's own generation, not whatever the server
+        # constant happens to be. Tying the two together would make this
+        # assertion pass by definition and hide the case it exists for: the
+        # client runs ahead of the server, so a real submission is routinely
+        # a generation the server was not written against.
+        self.assertEqual(inventory['schema_version'], 1)
         self.assertEqual(inventory['platform'], 'linux')
 
         findings = inventory['findings']
@@ -259,6 +264,52 @@ class TestRealArchive(ServerHarness):
         self.assertIn('title="Yes (auto-lock: 5 minutes)"', html)
         self.assertIn('title="72/100 - drempel &gt;=65 gehaald"', html)
         self.assertIn('>72<', html)
+
+    def test_a_counted_finding_shows_its_number(self):
+        """A finding that measures without judging still reports a number.
+
+        The client counts vulnerable packages but asserts no value for them,
+        because the register contradicts itself about which literal means
+        compliant. The count is the measurement; the verdict is nobody's to
+        add here.
+        """
+        members = real_archive_members()
+        document = json.loads(REAL_INVENTORY.read_text())
+        document['schema_version'] = 2
+        document['findings']['vulnerable_packages'] = {
+            'value': None,
+            'count': 3,
+            'finding': '3 kwetsbare packages gevonden',
+        }
+        for name in list(members):
+            if name.endswith(hb.ASSET_INVENTORY_FILENAME):
+                members[name] = json.dumps(document).encode()
+
+        status, body = self.submit(repack(members))
+        self.assertEqual(status, 200, body)
+        self.cache.rebuild()
+
+        html = self.fleet_html()
+        row = html.split(REAL_ASSET_ID, 1)[1].split('</tr>', 1)[0]
+        cell = row.split('<td class="fnd">')[-1]
+        self.assertIn('title="3 kwetsbare packages gevonden"', cell)
+        self.assertIn('>3<', cell)
+        self.assertNotIn('unknown', cell)
+        # and no verdict of the dashboard's own
+        for verdict_class in ('p-ok', 'p-open', 'p-exc'):
+            self.assertNotIn(verdict_class, row)
+
+    def test_a_finding_with_neither_value_nor_count_reads_unknown(self):
+        """The captured archive predates the count: nothing is invented."""
+        self.submit(REAL_ARCHIVE.read_bytes())
+        self.cache.rebuild()
+
+        row = self.fleet_html().split(REAL_ASSET_ID, 1)[1].split('</tr>', 1)[0]
+        # The column's own cell, not merely somewhere on the row: an
+        # unqualified search would pass on any other column reading unknown.
+        cell = row.split('<td class="fnd">')[-1]
+        self.assertIn('unknown', cell)
+        self.assertIn('geen package audit tool aanwezig', cell)
 
     def test_the_view_adds_no_verdict(self):
         """No finding cell may be coloured as a pass or a failure."""
