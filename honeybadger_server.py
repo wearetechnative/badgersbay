@@ -19,7 +19,7 @@ import base64
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import unquote
+from urllib.parse import unquote, parse_qs
 from html import escape as html_escape
 import logging
 
@@ -726,7 +726,7 @@ def evaluate_completeness(asset_class, reports, overrides=None):
 
 
 def compute_round_state(register, cache, period, audit_months, grace_weeks,
-                        today=None, class_requirements=None):
+                        today=None, class_requirements=None, exceptions=None):
     """Describe one audit round against the asset register.
 
     The register is the denominator: every asset in scope gets an entry here,
@@ -734,10 +734,10 @@ def compute_round_state(register, cache, period, audit_months, grace_weeks,
     previous model could only show what arrived, so an asset that never
     reported produced no row at all rather than a red one.
 
-    Assets fall into five buckets, and they are kept apart on purpose. Counting
-    an accounted-for asset as scanned would fold "we hold evidence" together
-    with "we hold an excuse", and the deviation count is exactly what the ISO
-    tool needs as a separate number.
+    Assets fall into six buckets, and they are kept apart on purpose. Counting
+    an excepted or accounted-for asset as scanned would fold "we hold evidence"
+    together with "we hold an excuse", and the deviation count is exactly what
+    the ISO tool needs as a separate number.
     """
     today = today or date.today()
     scan_start, scan_end, coverage_end = get_round_windows(period, audit_months, grace_weeks)
@@ -753,6 +753,7 @@ def compute_round_state(register, cache, period, audit_months, grace_weeks,
             by_asset[asset_id] = record
 
     scanned, outstanding, manual, accounted, unexplained = [], [], [], [], []
+    excepted = []
     seen_assets = set()
 
     for entry in (register.in_scope(scan_start, scan_end) if register and register.loaded else []):
@@ -764,13 +765,25 @@ def compute_round_state(register, cache, period, audit_months, grace_weeks,
         row = {'entry': entry, 'record': record}
 
         if record:
+            # A submission beats an exception. Requiring the operator to
+            # withdraw one first would create a state where evidence exists but
+            # is not counted, which is worse than the bookkeeping it saves.
             complete, missing = evaluate_completeness(
                 entry['class'], record.get('reports'), class_requirements
             )
             row['complete'] = complete
             row['missing'] = missing
             row['timeliness'] = record.get('timeliness')
+            row['superseded_exception'] = (
+                exceptions.get(entry['asset_id'], period) if exceptions else None
+            )
             scanned.append(row)
+            continue
+
+        exception = exceptions.get(entry['asset_id'], period) if exceptions else None
+        if exception:
+            row['exception'] = exception
+            excepted.append(row)
             continue
 
         # Left scope during the round without ever being scanned. The departure
@@ -791,7 +804,8 @@ def compute_round_state(register, cache, period, audit_months, grace_weeks,
 
         outstanding.append(row)
 
-    denominator = len(scanned) + len(accounted) + len(outstanding) + len(unexplained)
+    denominator = (len(scanned) + len(accounted) + len(excepted)
+                   + len(outstanding) + len(unexplained))
 
     return {
         'period': period,
@@ -801,12 +815,15 @@ def compute_round_state(register, cache, period, audit_months, grace_weeks,
         'is_open': scan_start <= today <= coverage_end,
         'scanned': scanned,
         'accounted': accounted,
+        'excepted': excepted,
         'outstanding': outstanding,
         'unexplained': unexplained,
         'manual': manual,
         'retired': register.retired() if register and register.loaded else [],
         'unmatched': cache.unmatched(period) if cache else [],
         'denominator': denominator,
+        # Closeable when nothing is left to chase. An exception resolves a row
+        # without scanning it; the deviation count stays visible separately.
         'closeable': not outstanding and not unexplained,
     }
 
@@ -883,10 +900,14 @@ class AssetRegister:
     submission is matched on, and one asset may have several over its life.
     """
 
-    def __init__(self, csv_path=None):
+    def __init__(self, csv_path=None, state_dir=None):
         self.csv_path = csv_path
         self.rows = []
         self.loaded = False
+        self.disappeared = []
+        # Where the previously loaded register is remembered, so a shrink can
+        # be spotted across a restart.
+        self.state_dir = Path(state_dir) if state_dir else None
 
     def load(self):
         """Read and validate the register. Raises AssetRegisterError on faults.
@@ -923,6 +944,7 @@ class AssetRegister:
         self._check_serial_overlaps()
 
         self.loaded = True
+        self.disappeared = self._detect_disappeared()
         assets = {row['asset_id'] for row in self.rows}
         active = {row['asset_id'] for row in self.rows if row['status'] == 'active'}
         logger.info(
@@ -1046,9 +1068,143 @@ class AssetRegister:
                 result.append(row)
         return result
 
+    def _detect_disappeared(self):
+        """Assets that were in the previous register and are not in this one.
+
+        A filtered or truncated export silently raises the coverage rate, which
+        is the one direction a compliance figure must never move by accident.
+        The server still starts - a legitimate shrink is normal, and taking the
+        portal down mid-round because two laptops were retired is worse than
+        the risk - but it says which assets went.
+        """
+        if not self.state_dir:
+            return []
+
+        previous_file = self.state_dir / 'register-previous.json'
+        current = sorted({row['asset_id'] for row in self.rows})
+
+        gone = []
+        if previous_file.is_file():
+            try:
+                with open(previous_file) as handle:
+                    previous = set(json.load(handle).get('asset_ids', []))
+                gone = sorted(previous - set(current))
+            except Exception as e:
+                logger.warning(f"Could not read the previous register state: {e}")
+
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            with open(previous_file, 'w') as handle:
+                json.dump({'asset_ids': current,
+                           'recorded_at': datetime.now().isoformat(timespec='seconds')},
+                          handle, indent=2)
+        except Exception as e:
+            logger.warning(f"Could not record the register state: {e}")
+
+        if gone:
+            logger.warning(
+                f"{len(gone)} asset(s) disappeared from the register: {', '.join(gone)}"
+            )
+        return gone
+
     def retired(self):
         """Rows excluded from the denominator but kept visible with their history."""
         return [row for row in self.rows if row['status'] == 'retired']
+
+
+class ExceptionStore:
+    """Assets an operator recorded as unable to be scanned in a given round.
+
+    An asset that cannot be scanned is a deviation, justified in the ISO tool.
+    This server does not hold that justification - it records that one exists,
+    so the round can close instead of showing a permanently red row nobody can
+    act on.
+
+    Exceptions are keyed on (asset_id, audit_period). An asset unreachable in
+    September may be perfectly reachable in March, and an exception that
+    outlived its round would quietly suppress a real gap. Keying per round
+    makes expiry automatic: when the next round opens, nothing carries over and
+    nothing needs clearing.
+    """
+
+    def __init__(self, storage_location):
+        self.base = Path(storage_location) / 'exceptions'
+        self.data = {}  # {(asset_id, period): record}
+
+    def rebuild(self):
+        """Read every exception from disk.
+
+        They live beside the reports for the same reason the reports do: an
+        exception is evidence, it survives a restart, and an auditor can be
+        handed it.
+        """
+        self.data = {}
+        if not self.base.is_dir():
+            return
+
+        for period_dir in self.base.iterdir():
+            if not period_dir.is_dir():
+                continue
+            for record_file in period_dir.glob('*.json'):
+                try:
+                    with open(record_file) as handle:
+                        record = json.load(handle)
+                except Exception as e:
+                    logger.warning(f"Could not read exception {record_file}: {e}")
+                    continue
+                asset_id = record.get('asset_id')
+                period = record.get('audit_period')
+                if asset_id and period:
+                    self.data[(asset_id, period)] = record
+
+        if self.data:
+            logger.info(f"Loaded {len(self.data)} exception(s)")
+
+    def get(self, asset_id, period):
+        return self.data.get((asset_id, period))
+
+    def for_period(self, period):
+        return {aid: rec for (aid, p), rec in self.data.items() if p == period}
+
+    def mark(self, asset_id, period, reason, marked_by):
+        """Record that an asset cannot be scanned this round.
+
+        A reason is required. An exception without one is indistinguishable
+        from a mistake, and it is what the ISO tool's justification points back
+        to. `marked_by` is self-reported: the dashboard has one shared
+        password, so it is not an authenticated identity and must not be shown
+        as one.
+        """
+        reason = (reason or '').strip()
+        if not reason:
+            raise ValueError("An exception needs a reason")
+
+        record = {
+            'asset_id': asset_id,
+            'audit_period': period,
+            'reason': reason,
+            'marked_by': (marked_by or '').strip() or 'unknown',
+            'marked_at': datetime.now().isoformat(timespec='seconds'),
+        }
+
+        target = self.base / period
+        target.mkdir(parents=True, exist_ok=True)
+        with open(target / f'{asset_id}.json', 'w') as handle:
+            json.dump(record, handle, indent=2)
+
+        self.data[(asset_id, period)] = record
+        logger.info(f"Exception recorded: {asset_id} in {period} - {reason}")
+        return record
+
+    def withdraw(self, asset_id, period):
+        """Remove an exception, returning the asset to outstanding."""
+        path = self.base / period / f'{asset_id}.json'
+        if path.is_file():
+            path.unlink()
+        removed = self.data.pop((asset_id, period), None)
+        if removed:
+            logger.info(f"Exception withdrawn: {asset_id} in {period}")
+        return removed
 
 
 class Config:
@@ -1129,6 +1285,7 @@ class ReportHandler(BaseHTTPRequestHandler):
     start_time = None
     compliance_cache = None
     asset_register = None
+    exception_store = None
 
     def log_message(self, format, *args):
         """Override to use custom logger"""
@@ -1556,8 +1713,58 @@ class ReportHandler(BaseHTTPRequestHandler):
             }
         }
 
+    def do_POST_exception(self, action):
+        """Record or withdraw an exception from the dashboard.
+
+        This is the one write the dashboard accepts. It sits behind the same
+        basic auth the dashboard uses, which is a single shared password - so
+        `marked_by` is what the operator typed, not an authenticated identity,
+        and is labelled as such wherever it is shown.
+        """
+        if not self._validate_basic_auth():
+            self._send_html_error(401, "Unauthorized", include_auth_header=True)
+            return
+
+        if not self.exception_store:
+            self._send_html_error(503, "Exceptions are unavailable")
+            return
+
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            form = parse_qs(self.rfile.read(length).decode('utf-8')) if length else {}
+
+            def field(name):
+                return (form.get(name, [''])[0] or '').strip()
+
+            asset_id, period = field('asset_id'), field('period')
+            if not asset_id or not period:
+                self._send_html_error(400, "An exception needs an asset and a round")
+                return
+
+            if action == 'withdraw':
+                self.exception_store.withdraw(asset_id, period)
+            else:
+                try:
+                    self.exception_store.mark(asset_id, period, field('reason'), field('marked_by'))
+                except ValueError as exc:
+                    self._send_html_error(400, str(exc))
+                    return
+
+            # Back to the round the operator was looking at.
+            self.send_response(303)
+            self.send_header('Location', f'/?view=round&period={period}')
+            self.end_headers()
+        except Exception as e:
+            logger.error(f"Error handling exception {action}: {e}", exc_info=True)
+            self._send_html_error(500, "Internal server error")
+
     def do_POST(self):
         """Handle POST requests with JSON report data"""
+        # Dashboard writes authenticate as a dashboard user, not as a client
+        if self.path in ('/exceptions/mark', '/exceptions/withdraw'):
+            self.do_POST_exception(self.path.rsplit('/', 1)[1])
+            return
+
         # Validate Bearer token authentication
         if not self._validate_bearer_token():
             auth_header = self.headers.get('Authorization', '')
@@ -2098,6 +2305,12 @@ class ReportHandler(BaseHTTPRequestHandler):
           margin-bottom:24px}
         .empty{padding:40px 20px;text-align:center;color:var(--ink-3)}
         .dash{color:var(--ink-3)}
+        .exc-form{display:flex;gap:5px;margin-top:6px;flex-wrap:wrap;align-items:center}
+        .exc-reason{font:inherit;font-size:12px;padding:3px 7px;border-radius:4px;
+          border:1px solid var(--line);background:var(--surface);color:var(--ink);
+          min-width:150px;flex:1}
+        .exc-who{min-width:90px;flex:0 0 90px}
+        .exc-reason:focus{outline:2px solid var(--accent);outline-offset:-1px}
     """
 
     def _dashboard_shell(self, title, active_tab, period, body):
@@ -2132,6 +2345,7 @@ class ReportHandler(BaseHTTPRequestHandler):
             self.asset_register, self.compliance_cache, period,
             self.config.audit_months, self.config.grace_weeks,
             class_requirements=getattr(self.config, 'class_requirements', None),
+            exceptions=self.exception_store,
         )
 
         if not (self.asset_register and self.asset_register.loaded):
@@ -2143,6 +2357,10 @@ class ReportHandler(BaseHTTPRequestHandler):
 
         scanned, accounted = state['scanned'], state['accounted']
         outstanding, unexplained = state['outstanding'], state['unexplained']
+        # Excepted and accounted-for are both resolved without evidence, and
+        # read the same way in the meter. They stay distinct in the data
+        # because one is a departure and the other a deliberate deviation.
+        resolved = accounted + state['excepted']
         total = state['denominator'] or 1
 
         def pct(n):
@@ -2152,13 +2370,13 @@ class ReportHandler(BaseHTTPRequestHandler):
         # An accounted-for asset is resolved even though it was never scanned:
         # its owner has nothing left to do.
         owners = {}
-        for bucket, resolved in ((scanned, True), (accounted, True),
-                                 (outstanding, False), (unexplained, False)):
+        for bucket, is_resolved in ((scanned, True), (resolved, True),
+                                    (outstanding, False), (unexplained, False)):
             for row in bucket:
                 owner = row['entry']['owner'] or 'unassigned'
                 tally = owners.setdefault(owner, [0, 0])
                 tally[1] += 1
-                if resolved:
+                if is_resolved:
                     tally[0] += 1
         owner_rows = ''.join(
             f'<div class="owner {"done" if d == t else "zero" if d == 0 else ""}">'
@@ -2183,12 +2401,12 @@ class ReportHandler(BaseHTTPRequestHandler):
         <span class="of">of {state['denominator']} assets scanned</span></div>
       <div class="meter">
         <span class="seg-ok" style="width:{pct(len(scanned))}"></span>
-        <span class="seg-exc" style="width:{pct(len(accounted))}"></span>
+        <span class="seg-exc" style="width:{pct(len(resolved))}"></span>
         <span class="seg-open" style="width:{pct(len(outstanding) + len(unexplained))}"></span>
       </div>
       <div class="key">
         <span><i class="seg-ok"></i><b>{len(scanned)}</b> scanned</span>
-        <span><i class="seg-exc"></i><b>{len(accounted)}</b> accounted for</span>
+        <span><i class="seg-exc"></i><b>{len(resolved)}</b> accounted for</span>
         <span><i class="seg-open"></i><b>{len(outstanding) + len(unexplained)}</b> outstanding</span>
       </div>
       <p style="margin:14px 0 0;font-size:12.5px;color:var(--ink-2);max-width:46ch">
@@ -2227,6 +2445,19 @@ class ReportHandler(BaseHTTPRequestHandler):
                 )
             alerts += ''.join(blocks)
 
+        if self.asset_register and getattr(self.asset_register, 'disappeared', None):
+            gone = self.asset_register.disappeared
+            alerts += (
+                f'<div class="alert crit"><h3>{len(gone)} asset(s) disappeared from '
+                f'the register</h3><p>They were in the previously loaded register and '
+                f'are not in this one. A filtered or truncated export silently raises '
+                f'the coverage rate, which is the one direction a compliance figure '
+                f'must never move by accident. If the removal was intended, mark them '
+                f'retired rather than deleting the rows.</p>'
+                f'<div class="mono" style="font-size:12.5px">'
+                f'{html_escape(", ".join(gone))}</div></div>'
+            )
+
         if unexplained:
             rows = ''.join(
                 f'<div class="mono" style="font-size:12.5px">'
@@ -2247,6 +2478,26 @@ class ReportHandler(BaseHTTPRequestHandler):
             'Badgersbay Scan Round', 'round', period,
             summary + alerts + self._round_table(state, period)
         )
+
+    def _exception_form(self, asset_id, period, withdraw=False):
+        """The control that records or withdraws an exception.
+
+        A same-origin form behind the dashboard's basic auth. The reason field
+        is required: an exception without one is indistinguishable from a
+        mistake, and it is what the justification in the ISO tool points back
+        to.
+        """
+        common = (f'<input type="hidden" name="asset_id" value="{html_escape(asset_id)}">'
+                  f'<input type="hidden" name="period" value="{html_escape(period)}">')
+        if withdraw:
+            return (f'<form method="post" action="/exceptions/withdraw" class="exc-form">'
+                    f'{common}<button class="btn" type="submit">Withdraw</button></form>')
+        return (f'<form method="post" action="/exceptions/mark" class="exc-form">{common}'
+                f'<input class="exc-reason" type="text" name="reason" required '
+                f'placeholder="Why it cannot be scanned" maxlength="200">'
+                f'<input class="exc-reason exc-who" type="text" name="marked_by" '
+                f'placeholder="Your name" maxlength="60">'
+                f'<button class="btn" type="submit">Account for</button></form>')
 
     def _round_table(self, state, period):
         """The per-asset table, grouped by state."""
@@ -2309,6 +2560,21 @@ class ReportHandler(BaseHTTPRequestHandler):
                                      html_escape(row['record']['submitted_at'][:10])))
             groups.append((f"Scanned this round &mdash; {len(state['scanned'])}", rows))
 
+        if state['excepted']:
+            rows = []
+            for row in state['excepted']:
+                exc = row['exception']
+                rows.append(row_html(
+                    row, 's-exc',
+                    f'<span class="pill p-exc">&#9680; accounted for</span>'
+                    f'<span class="sub">&ldquo;{html_escape(exc["reason"])}&rdquo;</span>'
+                    f'<span class="sub">{html_escape(exc["marked_by"])} &middot; '
+                    f'{html_escape(exc["marked_at"][:10])} &middot; self-reported</span>'
+                    + self._exception_form(row['entry']['asset_id'], period, withdraw=True),
+                    '<span class="badge none">none</span>', last_seen(row['entry'])
+                ))
+            groups.append((f"Accounted for &mdash; {len(state['excepted'])}", rows))
+
         if state['accounted']:
             rows = [row_html(
                 row, 's-exc',
@@ -2318,9 +2584,17 @@ class ReportHandler(BaseHTTPRequestHandler):
             ) for row in state['accounted']]
             groups.append((f"Accounted for &mdash; {len(state['accounted'])}", rows))
 
+        outstanding_rows = [
+            row_html(row, 's-open',
+                     '<span class="pill p-open">&#9888; outstanding</span>'
+                     + self._exception_form(row['entry']['asset_id'], period),
+                     '<span class="badge none">none</span>', last_seen(row['entry']))
+            for row in state['outstanding']
+        ]
+        if outstanding_rows:
+            groups.append((f"Outstanding &mdash; {len(outstanding_rows)}", outstanding_rows))
+
         for bucket, label, css, status in (
-            (state['outstanding'], 'Outstanding', 's-open',
-             '<span class="pill p-open">&#9888; outstanding</span>'),
             (state['unexplained'], 'Left scope without a reason', 's-open',
              '<span class="pill p-open">&#9888; unexplained departure</span>'),
             (state['manual'], 'Manual &mdash; outside the denominator', 's-man',
@@ -3358,13 +3632,22 @@ def run_server(config):
     # it is the denominator of every compliance figure the server reports.
     # An absent register is not - the server still accepts submissions, it just
     # cannot say who is missing.
-    register = AssetRegister(config.asset_register_path if config.compliance_enabled else None)
+    register = AssetRegister(
+        config.asset_register_path if config.compliance_enabled else None,
+        state_dir=config.storage_location,
+    )
     try:
         register.load()
     except AssetRegisterError as exc:
         logger.error(f"Asset register is invalid: {exc}")
         raise
     ReportHandler.asset_register = register
+
+    # Exceptions live beside the reports: they are evidence, they survive a
+    # restart, and an auditor can be handed them.
+    exceptions = ExceptionStore(config.storage_location)
+    exceptions.rebuild()
+    ReportHandler.exception_store = exceptions
 
     # Initialize and build compliance cache
     cache = ComplianceCache(config)
@@ -3415,6 +3698,15 @@ def parse_arguments():
         type=str,
         required=True,
         help='Path to plaintext file containing dashboard password. Example: --dashboard-password-file /etc/honeybadger/password.txt'
+    )
+
+    parser.add_argument(
+        '--asset-register',
+        metavar='PATH',
+        type=str,
+        help='Path to the asset register CSV, exported from the ISO compliance '
+             'sheet. Overrides compliance.asset_register in the config file. '
+             'Example: --asset-register /run/agenix/badgersbay-assets'
     )
 
     parser.add_argument(
@@ -3497,6 +3789,13 @@ def main():
 
         # Load configuration
         config = Config(str(config_path))
+
+        # A register named on the command line wins over the config file, so a
+        # deployment can point at an agenix secret without editing the config
+        # the module generates.
+        if args.asset_register:
+            config.asset_register_path = args.asset_register
+            logger.info(f"Asset register from command line: {args.asset_register}")
 
         # Load authentication credentials before starting server
         try:
