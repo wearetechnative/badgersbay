@@ -1,13 +1,13 @@
 ---
 # badgersbay-wfp5
 title: Show the findings in the fleet view
-status: todo
+status: completed
 type: task
 priority: high
 tags:
     - badgersbay
 created_at: 2026-09-16T09:02:52Z
-updated_at: 2026-09-16T09:02:52Z
+updated_at: 2026-09-16T09:17:47Z
 parent: badgersbay-ucgi
 ---
 
@@ -29,3 +29,12 @@ reports its own verdict in the finding text; the dashboard shows the number and
 that text and adds nothing.
 
 Tasks 3.1 to 3.5 in the OpenSpec change.
+
+
+## Summary of Changes
+
+Five columns in the fleet view, driven by the module-level `INVENTORY_COLUMNS` and rendered by `_inventory_cells()` / `inventory_cell()`, under a grouped header reading "Audit findings - as reported by the client".
+
+Each value carries the finding it came from in a `title`, so provenance is on the row. A null value renders as `unknown` with the client's reason shown as a visible sub-line, not blank. An asset with no inventory, and one never seen at all, render as `unknown` in all five columns without changing the row's coverage state.
+
+No finding cell uses a verdict class - `test_the_view_adds_no_verdict` asserts it. The legend says where the columns come from and what unknown means.

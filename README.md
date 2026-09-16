@@ -247,6 +247,7 @@ reports/
       honeybadger-20260915-132534.tar.gz   the archive, kept whole
       fastfetch-report.json                extracted
       lynis-report.json                    extracted
+      asset-inventory.json                 extracted, the client's findings
       submission.json                      what this submission was
   unmatched/<hostname>-<username>/<timestamp>/
   2026-03/                                 archive of the pre-serial layout
@@ -260,6 +261,55 @@ leaving directory names that quietly mean something else.
 A submission that cannot be attributed is stored, never rejected. The two ways
 that happens need different fixes and are reported separately: `no_serial` is a
 client problem, `serial_not_in_register` is a register problem.
+
+## The Audit's Findings
+
+The client determines the values the ISO register needs and ships them in
+`asset-inventory.json`. The server reads them so they can be read off the
+dashboard rather than retyped into the spreadsheet by hand.
+
+`submission.json` carries them twice, on purpose:
+
+| Field | Holds |
+|-----------------|--------------------------------------------------------|
+| `inventory` | the findings, denormalised beside `asset_id` and `owner` |
+| `inventory_raw` | the document whole, including fields no column shows |
+
+The findings are denormalised for the same reason the owner is: the register
+moves, the client moves, and a closed round has to keep reporting what was true
+when it was scanned. The document is kept whole because the client runs ahead
+of the server and always will - storing only what is modelled today would throw
+the rest away at the door.
+
+The **All assets** view has a column for each of disk encryption, screen lock,
+firewall, hardening score and OS currency. Each cell shows the value the client
+determined; hovering it shows the finding that value came from, so an auditor
+asking "how do you know" can be answered without unpacking the archive. The
+inventory is also stored beside the reports, so it downloads like any other
+piece of evidence.
+
+**Unknown is not a failure.** A cell reads `unknown` in three situations, and
+none of them is the asset's fault:
+
+- the client sent no inventory (an older client, or a Windows asset);
+- this generation of the client does not report that field;
+- the client deliberately declined to assert a value, in which case its reason
+  is shown rather than left blank.
+
+**No value is coloured as a pass or a failure.** Whether a hardening score of
+62 is acceptable is a threshold the ISO process owns. The client already
+reports its own verdict in the finding text; the dashboard shows the number and
+that text and adds no judgement of its own.
+
+The inventory is a summary of the reports, not a report. It never counts toward
+completeness, so a client that sends none is not incomplete for a reason its
+owner cannot act on. A document declaring a `schema_version` the server does
+not recognise is stored whole and rendered for the fields it does understand;
+one that cannot be parsed at all is logged, reported back to the client, and
+skipped, and the submission is stored regardless.
+
+Submissions already on disk are not re-read. Their columns stay empty until the
+asset submits again.
 
 ## Audit Rounds
 
@@ -487,6 +537,24 @@ A system is marked "Complete" when it has:
 - Fastfetch (identity)
 - Lynis (hardening audit)
 - Trivy OR Vulnix (vulnerability scan)
+
+`asset-inventory.json` is not in this table. It summarises what the reports
+say rather than being one of them, so it never counts toward completeness. See
+[The Audit's Findings](#the-audits-findings).
+
+## Testing
+
+```bash
+# End-to-end tests. Each starts a real server on an ephemeral port against a
+# throwaway storage tree and submits a real client archive over HTTP.
+python3 -m unittest test_asset_inventory -v
+
+# The pure functions carry doctests
+python3 -m doctest honeybadger_server.py -v
+```
+
+`test-archive-current-client.tar.gz` was produced by the honeybadger client,
+not written by hand.
 
 ## Configuration File
 

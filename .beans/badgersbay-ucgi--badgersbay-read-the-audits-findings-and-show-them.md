@@ -1,14 +1,14 @@
 ---
 # badgersbay-ucgi
 title: 'badgersbay: read the audit''s findings and show them in the fleet view'
-status: todo
+status: completed
 type: epic
 priority: high
 tags:
     - badgersbay
     - iso27001
 created_at: 2026-09-16T09:02:28Z
-updated_at: 2026-09-16T09:02:28Z
+updated_at: 2026-09-16T09:19:15Z
 ---
 
 Close the loop the exploration set out to close: the client determines the
@@ -75,3 +75,18 @@ client, the tests pass, and the OpenSpec change is archived.
 Writing the spreadsheet, and judging the values. Whether a hardening score of
 62 is acceptable is a threshold that belongs to the ISO process; the dashboard
 reports what was found and adds no verdict of its own.
+
+
+## Summary of Changes
+
+The client determines the compliance values, the server now reads them, and the fleet view shows them.
+
+**Recognition.** `asset-inventory.json` is recognised by filename in `extract_and_validate_tar()` and carried out as `extraction['inventory']`, separate from `reports`. `detect_report_type_from_filename()` returns None for it explicitly. It never reaches the requirement set, so completeness is untouched by its presence or absence.
+
+**The record.** `submission.json` gains `inventory` (parsed findings) and `inventory_raw` (the document whole). The document is also written into the record directory, which makes it downloadable through the existing `/evidence/` route.
+
+**The view.** Five columns - disk encryption, screen lock, firewall, hardening score, OS current - under a grouped header. Each value carries its finding in a title; a declined value reads unknown with the reason shown; an asset with no inventory reads unknown, not as a failure. No cell is coloured as a pass or a failure.
+
+All eight acceptance criteria are covered by tests in `test_asset_inventory.py`, run against a real archive from the current client. The 207 regression is verified to reproduce on the pre-change code.
+
+OpenSpec change `consume-asset-inventory` archived as `2026-09-16-consume-asset-inventory`; its three capability deltas synced into `openspec/specs/`.

@@ -1,13 +1,13 @@
 ---
 # badgersbay-9k2u
 title: Write the findings into the submission record
-status: todo
+status: completed
 type: task
 priority: high
 tags:
     - badgersbay
 created_at: 2026-09-16T09:02:52Z
-updated_at: 2026-09-16T09:02:52Z
+updated_at: 2026-09-16T09:12:55Z
 parent: badgersbay-ucgi
 ---
 
@@ -28,3 +28,8 @@ would take the fleet out of the dashboard on a client upgrade.
 Malformed JSON is logged and skipped, never fatal to the submission.
 
 Tasks 2.1 to 2.4 in the OpenSpec change.
+
+
+## Summary of Changes
+
+`store_submission()` takes an `inventory=` argument. `submission.json` gains `inventory` (the parsed findings, via the new module-level `parse_asset_inventory()`) and `inventory_raw` (the document whole). The document is also written to the record directory as `asset-inventory.json`, which makes it downloadable through the existing `/evidence/` route without further work. An unknown `schema_version` is logged and kept; a document with no usable findings is logged, stored whole, and recorded with no findings.

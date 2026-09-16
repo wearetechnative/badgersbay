@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **The audit's findings are read and shown.** The client has determined disk
+  encryption, screen lock, firewall, hardening score and OS currency all along
+  and shipped them in `asset-inventory.json`; the server stored the file and
+  read nothing from it. It now reads them, so the values can be read off the
+  dashboard rather than retyped into the spreadsheet by hand.
+  - Five columns in the **All assets** view, one per finding. Hovering a value
+    shows the finding it was derived from, so "how do you know" can be answered
+    without unpacking the archive
+  - `submission.json` carries the findings beside `asset_id` and `owner`, and
+    the document whole under `inventory_raw` - the client runs ahead of the
+    server and always will, so nothing is discarded at the door
+  - The inventory is stored beside the reports and downloads like any other
+    piece of evidence
+  - Unknown is not a failure: no inventory, a field this client generation does
+    not report, and a value the client declined to assert all read as unknown,
+    the last with the client's reason shown rather than left blank
+  - No value is coloured as a pass or a failure. Whether a hardening score of
+    62 is acceptable is a threshold the ISO process owns; the dashboard reports
+    what was found and adds no verdict of its own
 - **Accounting for an asset that cannot be scanned.** A control on each
   outstanding row records a reason, and the asset moves to a third category:
   `scanned / accounted for / outstanding`. Counting an accounted-for asset as
@@ -29,6 +48,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   which is the one direction a compliance figure must never move by accident.
   The server still starts: taking the portal down mid-round because two laptops
   were retired is worse than the risk.
+
+### Fixed
+
+- **A submission from a current client answers 200 again.**
+  `asset-inventory.json` is a JSON member, so it reached the report type
+  detection, which did not know it and reported it as unrecognised. Every
+  submission from a current client answered 207 and said something needed
+  attention when nothing did. It is now recognised as a summary rather than a
+  report: extracted and stored, and kept out of the requirement set, so an
+  older client that sends none does not become incomplete for a reason its
+  owner cannot act on.
 
 ### Added
 

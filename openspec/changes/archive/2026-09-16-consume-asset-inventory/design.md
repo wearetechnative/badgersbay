@@ -21,6 +21,18 @@ model, and it will emit more. Storing only what is modelled today would throw
 away the rest at the door, which is the mistake this whole line of work exists
 to correct.
 
+## Decision: a malformed inventory is reported back as well as logged
+
+Skipped, never fatal - the submission is evidence regardless. But it is also
+reported in the response's `unrecognised` list, alongside every other JSON
+member the server could not read, so the submission answers 207 rather than
+200.
+
+Silently accepting a broken inventory would leave the client with no way to
+learn it is writing broken JSON, and a column that reads unknown forever is
+exactly the failure this change exists to remove. A server-side log line is not
+enough: nobody reads the server's log on the client's behalf.
+
 ## Decision: an unknown schema version is kept, not refused
 
 `schema_version` tells generations apart. A version the server does not
