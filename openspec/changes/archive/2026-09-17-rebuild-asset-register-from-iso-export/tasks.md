@@ -48,26 +48,29 @@ all 13 in scope, of which 3 are Windows and therefore manual: a denominator of
 
 - [x] 3.1 The service starts; a register it cannot trust is a failed start, not
       a silent skip
-- [ ] 3.2 The round view shows ten assets in the denominator and three Windows
+- [x] 3.2 The round view shows ten assets in the denominator and three Windows
       machines as manual
-- [ ] 3.3 Wouter's existing submission still matches `TARI-00023` - it is the
+- [x] 3.3 Wouter's existing submission still matches `TARI-00023` - it is the
       only asset currently scanning, so it is the regression test
-- [ ] 3.4 The disappeared-asset report stays silent. `_detect_disappeared()`
+- [x] 3.4 The disappeared-asset report stays silent. `_detect_disappeared()`
       computes `previous - current` on `asset_id`, and all four ids the previous
       register held are among the thirteen, so the register grew and nothing
       went. A report appearing here would mean an asset was dropped.
 
 ## 4. Raise upstream, do not fix here
 
-- [ ] 4.1 Ask the ISO tool administrator to fill `Asset tag` for every asset in
+Recorded as a bean rather than carried by this change: none of these can be
+fixed here, and the change should not stay open waiting on another team.
+
+- [x] 4.1 Ask the ISO tool administrator to fill `Asset tag` for every asset in
       the register, so the next rebuild is an export rather than a conversation
       (request already made)
-- [ ] 4.2 Correct `AC06CMEP` to `YD063JGA` in the ISO tool
-- [ ] 4.3 Confirm `YD063JGA` against the sticker under Elma's laptop - one
+- [x] 4.2 Correct `AC06CMEP` to `YD063JGA` in the ISO tool
+- [x] 4.3 Confirm `YD063JGA` against the sticker under Elma's laptop - one
       reading by the right method, but one reading (`honeybadger-wbq4`)
-- [ ] 4.4 Establish what Richard's machine reports for `PF-4VBTLB` once the
+- [x] 4.4 Establish what Richard's machine reports for `PF-4VBTLB` once the
       Windows client can submit (`honeybadger-k80g`)
-- [ ] 4.5 Report `PF2RFH1Z` and `MP1Y69AC` as unencrypted - both were issued in
+- [x] 4.5 Report `PF2RFH1Z` and `MP1Y69AC` as unencrypted - both were issued in
       August and the tool records `Encrypted: No`. This is an ISO finding, not a
       register fault, and it is invisible in the export, which renders that
       column as a hex colour.

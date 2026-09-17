@@ -1,14 +1,14 @@
 ---
 # badgersbay-aozk
 title: Rebuild the asset register from the ISO tool export
-status: todo
+status: completed
 type: feature
 priority: high
 tags:
     - register
     - iso
 created_at: 2026-09-17T13:06:28Z
-updated_at: 2026-09-17T13:06:28Z
+updated_at: 2026-09-17T13:33:01Z
 ---
 
 OpenSpec change: `rebuild-asset-register-from-iso-export`.

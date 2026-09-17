@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **What belongs in the asset register is now a rule, not a habit.** An asset
+  that cannot run the audit, one held in stock with no user, and one outside the
+  ISO scope each stay out, and each exclusion is recorded with its reason - so a
+  reader comparing the register against the company's laptop count can tell a
+  decision from an omission.
+  - `asset_id` comes from the ISO tool. badgersbay does not issue identifiers of
+    its own: two issuers would drift, and the register ships as an encrypted
+    secret nobody can consult
+  - Identity follows the asset, not the person holding it. A machine that moves
+    between people keeps its own identifier rather than inheriting the one of the
+    machine it replaced for someone
+  - Where the tool and the machine disagree about a serial, the register carries
+    what the machine reports - it is the value an incoming submission is matched
+    on
+
 - **The vulnerable package count is shown.** The client counts vulnerable
   packages but deliberately asserts no verdict on them, because the asset
   register contradicts itself about which literal in column J means compliant.
