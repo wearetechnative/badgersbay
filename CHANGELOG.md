@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`/health` counts what the server reads.** It walked one of two storage
+  layouts chosen by a configuration flag, and the serial-keyed tree the server
+  actually writes was in neither - so it reported zero submissions on a server
+  that was receiving them. It now counts the same three trees the dashboard
+  does.
+  - `statistics.by_source` splits the total into `matched`, `unmatched` and
+    `archived`. A machine scanning without being credited to any asset was
+    invisible here and can now be alerted on
+  - Hostnames come from the submission record where it has one, rather than
+    from parsing a directory name
+
 - **What belongs in the asset register is now a rule, not a habit.** An asset
   that cannot run the audit, one held in stock with no user, and one outside the
   ISO scope each stay out, and each exclusion is recorded with its reason - so a

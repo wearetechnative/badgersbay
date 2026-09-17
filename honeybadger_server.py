@@ -1825,54 +1825,63 @@ class ReportHandler(BaseHTTPRequestHandler):
         """Get health status information for monitoring"""
         storage_path = Path(self.config.storage_location)
 
-        # Count systems, not audit periods. Where the system directories sit
-        # depends on the storage mode, so the walk differs per mode.
+        # Count what the server reads, which is the three trees
+        # ComplianceCache._scan_submissions() walks. Counting anything else is
+        # how this endpoint came to report zero on a server that was receiving
+        # submissions: it knew only the layouts a configuration flag selected,
+        # and the one the server actually writes was in neither branch.
         total_reports = 0
         unique_hosts = set()
         report_counts = {'lynis': 0, 'fastfetch': 0}
+        by_source = {'matched': 0, 'unmatched': 0, 'archived': 0}
 
-        def count_system_dir(system_dir, hostname):
-            """Count one system directory and the report types it holds"""
+        def count_record(record_dir, source, hostname=None):
+            """Count one submission record and the report types it holds."""
             nonlocal total_reports
             total_reports += 1
+            by_source[source] += 1
+
+            # The record names itself where it can. Parsing a directory name is
+            # the fragile path, so it is the fallback rather than the rule.
+            if hostname is None:
+                meta = record_dir / 'submission.json'
+                if meta.is_file():
+                    try:
+                        with open(meta) as handle:
+                            hostname = json.load(handle).get('hostname')
+                    except Exception:
+                        hostname = None
             if hostname:
                 unique_hosts.add(hostname)
-            if (system_dir / 'lynis-report.json').exists():
-                report_counts['lynis'] += 1
-            if (system_dir / 'fastfetch-report.json').exists():
-                report_counts['fastfetch'] += 1
+
+            for report_type in report_counts:
+                if (record_dir / f'{report_type}-report.json').exists():
+                    report_counts[report_type] += 1
 
         if storage_path.exists():
-            if self.config.compliance_enabled:
-                # COMPLIANCE MODE: reports/{audit-period}/{hostname-username}/
-                for period_dir in storage_path.iterdir():
-                    if not period_dir.is_dir():
+            for source, base in (('matched', storage_path / 'submissions'),
+                                 ('unmatched', storage_path / 'unmatched')):
+                if not base.is_dir():
+                    continue
+                for key_dir in base.iterdir():
+                    if not key_dir.is_dir():
                         continue
-                    if not is_audit_period_dirname(period_dir.name):
+                    for record_dir in key_dir.iterdir():
+                        if record_dir.is_dir():
+                            count_record(record_dir, source)
+
+            # The layout used before submissions were keyed on serial. Kept as
+            # archive: read, counted, and named as such.
+            for period_dir in storage_path.iterdir():
+                if not period_dir.is_dir():
+                    continue
+                if not is_audit_period_dirname(period_dir.name):
+                    continue
+                for system_dir in period_dir.iterdir():
+                    if not system_dir.is_dir():
                         continue
-
-                    for system_dir in period_dir.iterdir():
-                        if not system_dir.is_dir():
-                            continue
-
-                        # Extract hostname from {hostname}-{username}
-                        parts = system_dir.name.rsplit('-', 1)
-                        hostname = parts[0] if len(parts) == 2 else None
-                        count_system_dir(system_dir, hostname)
-            else:
-                # LEGACY MODE: reports/{hostname-username-YYYYMMDD}/
-                for item in storage_path.iterdir():
-                    if not item.is_dir():
-                        continue
-
-                    # Extract hostname from {hostname}-{username}-{yyyymmdd}
-                    hostname = None
-                    parts = item.name.rsplit('-', 1)
-                    if len(parts) == 2:
-                        host_parts = parts[0].rsplit('-', 1)
-                        if len(host_parts) == 2:
-                            hostname = host_parts[0]
-                    count_system_dir(item, hostname)
+                    hostname, _, _username = system_dir.name.rpartition('-')
+                    count_record(system_dir, 'archived', hostname or None)
 
         # Calculate uptime
         uptime_seconds = int(time.time() - self.start_time) if self.start_time else 0
@@ -1891,7 +1900,8 @@ class ReportHandler(BaseHTTPRequestHandler):
             'statistics': {
                 'total_report_directories': total_reports,
                 'unique_hosts': len(unique_hosts),
-                'reports_by_type': report_counts
+                'reports_by_type': report_counts,
+                'by_source': by_source
             },
             'storage': {
                 'location': str(storage_path),

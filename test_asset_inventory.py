@@ -172,6 +172,12 @@ class ServerHarness(unittest.TestCase):
         with urllib.request.urlopen(request) as response:
             return response.read().decode()
 
+    def health(self):
+        """Fetch /health, which takes no authentication."""
+        with urllib.request.urlopen(
+                f'http://127.0.0.1:{self.port}/health') as response:
+            return json.loads(response.read())
+
     def records(self):
         """Every submission.json written under the serial-keyed tree."""
         return sorted((self.storage / 'submissions').rglob('submission.json'))
@@ -478,6 +484,60 @@ class TestMalformedInventory(ServerHarness):
         record = self.only_record()
         self.assertIsNone(record['inventory'])
         self.assertEqual(record['inventory_raw']['note'], 'no findings here')
+
+
+class TestHealthCountsWhatTheServerReads(ServerHarness):
+    """/health reported zero on a server that was receiving submissions.
+
+    It walked one of two layouts chosen by a configuration flag, and the
+    serial-keyed tree the server actually writes was in neither.
+    """
+
+    def test_a_real_submission_is_counted(self):
+        self.submit(REAL_ARCHIVE.read_bytes())
+
+        stats = self.health()['statistics']
+        self.assertEqual(stats['total_report_directories'], 1)
+        self.assertEqual(stats['by_source']['matched'], 1)
+        self.assertEqual(stats['reports_by_type']['lynis'], 1)
+        self.assertEqual(stats['reports_by_type']['fastfetch'], 1)
+
+    def test_the_hostname_comes_from_the_record(self):
+        self.submit(REAL_ARCHIVE.read_bytes(), hostname='lobos')
+
+        self.assertEqual(self.health()['statistics']['unique_hosts'], 1)
+
+    def test_an_unmatched_submission_is_counted_and_named(self):
+        """A machine scanning without being credited is the interesting case."""
+        members = real_archive_members()
+        for name in list(members):
+            if name.endswith('hardware-serial.txt'):
+                members[name] = b'SERIALNOTINREGISTER\n'
+
+        self.submit(repack(members), hostname='stranger')
+
+        stats = self.health()['statistics']
+        self.assertEqual(stats['total_report_directories'], 1)
+        self.assertEqual(stats['by_source']['unmatched'], 1)
+        self.assertEqual(stats['by_source']['matched'], 0)
+
+    def test_archive_period_directories_are_still_counted(self):
+        """Fixing one blind spot must not open another."""
+        archived = self.storage / '2026-03' / 'oldhost-olduser'
+        archived.mkdir(parents=True)
+        (archived / 'lynis-report.json').write_text('{}')
+
+        stats = self.health()['statistics']
+        self.assertEqual(stats['total_report_directories'], 1)
+        self.assertEqual(stats['by_source']['archived'], 1)
+        self.assertEqual(stats['unique_hosts'], 1)
+        self.assertEqual(stats['reports_by_type']['lynis'], 1)
+
+    def test_an_empty_tree_reports_zero(self):
+        stats = self.health()['statistics']
+        self.assertEqual(stats['total_report_directories'], 0)
+        self.assertEqual(stats['by_source'],
+                         {'matched': 0, 'unmatched': 0, 'archived': 0})
 
 
 if __name__ == '__main__':
