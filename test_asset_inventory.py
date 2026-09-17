@@ -172,6 +172,16 @@ class ServerHarness(unittest.TestCase):
         with urllib.request.urlopen(request) as response:
             return response.read().decode()
 
+    def download(self, serial, record_name, filename):
+        """Fetch one evidence file, returning (Content-Disposition, bytes)."""
+        credentials = b64encode(f'admin:{PASSWORD}'.encode()).decode()
+        url = (f'http://127.0.0.1:{self.port}/evidence/{serial}/'
+               f'{record_name}/{filename}')
+        request = urllib.request.Request(
+            url, headers={'Authorization': f'Basic {credentials}'})
+        with urllib.request.urlopen(request) as response:
+            return response.headers.get('Content-Disposition'), response.read()
+
     def health(self):
         """Fetch /health, which takes no authentication."""
         with urllib.request.urlopen(
@@ -538,6 +548,57 @@ class TestHealthCountsWhatTheServerReads(ServerHarness):
         self.assertEqual(stats['total_report_directories'], 0)
         self.assertEqual(stats['by_source'],
                          {'matched': 0, 'unmatched': 0, 'archived': 0})
+
+
+class TestDownloadsAreNamedForTheirAsset(ServerHarness):
+    """A report named for itself carries the same name on every asset.
+
+    Downloading two assets into one folder overwrote one with the other, and a
+    file called lynis-report.json has to be renamed by hand before it is
+    evidence of anything.
+    """
+
+    def test_a_report_names_the_asset_and_the_round(self):
+        self.submit(REAL_ARCHIVE.read_bytes())
+        record_dir = self.records()[0].parent
+
+        disposition, _ = self.download(
+            REAL_SERIAL, record_dir.name, 'lynis-report.json')
+
+        self.assertIn(REAL_ASSET_ID, disposition)
+        self.assertIn('-lynis.json', disposition)
+        self.assertNotIn('"lynis-report.json"', disposition)
+
+    def test_the_archive_keeps_its_convention(self):
+        """The one file that was already right must stay right."""
+        self.submit(REAL_ARCHIVE.read_bytes())
+        record_dir = self.records()[0].parent
+        archive = next(record_dir.glob('*.tar.gz'))
+
+        disposition, _ = self.download(
+            REAL_SERIAL, record_dir.name, archive.name)
+
+        self.assertIn(REAL_ASSET_ID, disposition)
+        self.assertIn('.tar.gz', disposition)
+        self.assertNotIn('-lynis', disposition)
+
+    def test_two_assets_do_not_collide(self):
+        """The regression: both used to arrive as lynis-report.json.
+
+        Asserted on the naming itself rather than end to end, because the
+        evidence route serves only registered assets - a second asset would
+        need a second register entry, and the collision is a property of the
+        name.
+        """
+        first = hb.evidence_download_name('lynis-report.json', {
+            'asset_id': 'TARI-00023', 'owner': 'Wouter van der Toorren',
+            'submitted_at': '2026-09-17T09:00:00'})
+        second = hb.evidence_download_name('lynis-report.json', {
+            'asset_id': 'TARI-00030', 'owner': 'Bas Anneveld',
+            'submitted_at': '2026-09-17T09:00:00'})
+
+        self.assertNotEqual(first, second)
+        self.assertNotIn('lynis-report.json', (first, second))
 
 
 if __name__ == '__main__':

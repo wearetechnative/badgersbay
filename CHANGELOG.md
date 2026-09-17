@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Every download is named for its asset.** The proof-file convention was
+  applied only to the archive, so each asset's reports arrived as
+  `lynis-report.json` - the same name fleet-wide, overwriting one another in a
+  folder and needing a manual rename before they were evidence of anything.
+  - Reports now arrive as `TARI-00023-2026-09-17-wouter.toorren-lynis.json`,
+    which sorts an asset's evidence together
+  - A submission that matched no asset is named for the identity it has - its
+    serial, or the hostname and username it arrived under - instead of the name
+    every submission shares
+
 - **`/health` counts what the server reads.** It walked one of two storage
   layouts chosen by a configuration flag, and the serial-keyed tree the server
   actually writes was in neither - so it reported zero submissions on a server

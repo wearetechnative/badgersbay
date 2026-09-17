@@ -812,6 +812,102 @@ REQUIREMENT_SATISFIED_BY = {
 MANUAL_CLASSES = {'windows'}
 
 
+def evidence_download_name(filename, record):
+    """Name a served file for the asset and round it belongs to.
+
+    The proof file convention of the compliance sheet is `<asset>-<date>`, so a
+    download filed under this name is already evidence for a known asset in a
+    known round. The report type is appended rather than replacing it, which
+    keeps an asset's files together when a folder is sorted.
+
+    `record` is the submission record, or None when there is none to read.
+
+    Examples:
+        >>> rec = {'asset_id': 'TARI-00023', 'owner': 'Wouter van der Toorren',
+        ...        'submitted_at': '2026-09-17T14:22:33+02:00'}
+        >>> evidence_download_name('honeybadger-20260917-142233.tar.gz', rec)
+        'TARI-00023-2026-09-17-wouter.toorren.tar.gz'
+        >>> evidence_download_name('lynis-report.json', rec)
+        'TARI-00023-2026-09-17-wouter.toorren-lynis.json'
+        >>> evidence_download_name('asset-inventory.json', rec)
+        'TARI-00023-2026-09-17-wouter.toorren-asset-inventory.json'
+
+        An owner the register does not name still yields a usable name:
+
+        >>> evidence_download_name('lynis-report.json',
+        ...     {'asset_id': 'TARI-00042', 'submitted_at': '2026-09-17T09:00:00'})
+        'TARI-00042-2026-09-17-lynis.json'
+
+        An unmatched submission is named for the identity it has. The serial is
+        preferred: it is what the register will be matched on once the asset is
+        in it.
+
+        >>> evidence_download_name('lynis-report.json',
+        ...     {'serial': 'PF3NCBYR', 'hostname': 'lobos', 'username': 'wtoorren',
+        ...      'submitted_at': '2026-09-17T09:00:00'})
+        'PF3NCBYR-2026-09-17-lynis.json'
+        >>> evidence_download_name('honeybadger-20260917-090000.tar.gz',
+        ...     {'hostname': 'lobos', 'username': 'wtoorren',
+        ...      'submitted_at': '2026-09-17T09:00:00'})
+        'lobos-wtoorren-2026-09-17.tar.gz'
+
+        With nothing to go on, the file keeps its own name rather than being
+        given a misleading one:
+
+        >>> evidence_download_name('lynis-report.json', None)
+        'lynis-report.json'
+    """
+    if not isinstance(record, dict):
+        return filename
+
+    # ".tar.gz" is one suffix. Path().suffix would call it ".gz" and leave
+    # ".tar" stranded in the stem.
+    if filename.endswith('.tar.gz'):
+        stem, extension = filename[:-len('.tar.gz')], '.tar.gz'
+    else:
+        dot = filename.rfind('.')
+        stem, extension = (filename[:dot], filename[dot:]) if dot > 0 else (filename, '')
+
+    date = str(record.get('submitted_at') or '')[:10]
+    if not date:
+        return filename
+
+    identity = record.get('asset_id')
+    if identity:
+        owner_slug = owner_to_slug(record.get('owner'))
+        parts = [identity, date] + ([owner_slug] if owner_slug else [])
+    else:
+        # No asset: name it for what the submission does carry. This is the case
+        # the reader most needs to identify - a machine scanning without being
+        # credited to any asset - so it must not fall through to the name every
+        # submission shares.
+        serial = record.get('serial')
+        if serial:
+            parts = [serial, date]
+        elif record.get('hostname') or record.get('username'):
+            who = '-'.join(p for p in (record.get('hostname'),
+                                       record.get('username')) if p)
+            parts = [who, date]
+        else:
+            return filename
+
+    # The archive is the submission itself and needs no type; a report does.
+    suffix = '' if extension == '.tar.gz' else _download_type(stem)
+    return '-'.join(parts) + (f'-{suffix}' if suffix else '') + extension
+
+
+def _download_type(stem):
+    """The part of a stored filename that says what kind of report it is.
+
+    Examples:
+        >>> _download_type('lynis-report')
+        'lynis'
+        >>> _download_type('asset-inventory')
+        'asset-inventory'
+    """
+    return stem[:-len('-report')] if stem.endswith('-report') else stem
+
+
 def owner_to_slug(owner):
     """Render an owner name the way the register's proof_file column does.
 
@@ -3812,21 +3908,18 @@ class ReportHandler(BaseHTTPRequestHandler):
 
                 # Downloads carry the register's proof-file convention, so the
                 # file can go straight into the audit folder under the name the
-                # compliance sheet expects.
-                download_name = target.name
+                # compliance sheet expects. Every file, not only the archive:
+                # a report named for itself carries the same name on every
+                # asset in the fleet.
+                meta = None
                 record = target.parent / 'submission.json'
-                if record.is_file() and target.suffix == '.gz':
+                if record.is_file():
                     try:
                         with open(record) as handle:
                             meta = json.load(handle)
-                        if meta.get('asset_id'):
-                            owner_slug = owner_to_slug(meta.get('owner'))
-                            download_name = (
-                                f"{meta['asset_id']}-{meta['submitted_at'][:10]}"
-                                f"{'-' + owner_slug if owner_slug else ''}.tar.gz"
-                            )
                     except Exception as e:
-                        logger.warning(f"Could not build download name for {target}: {e}")
+                        logger.warning(f"Could not read {record} for a download name: {e}")
+                download_name = evidence_download_name(target.name, meta)
 
                 content_type = 'application/gzip' if target.suffix == '.gz' else 'application/json'
                 payload = target.read_bytes()
