@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **The evidence behind an unmatched submission is reachable.** The round view
+  named two reasons a submission matched no asset - the client could not read
+  the hardware, or the register is behind - and both are settled by opening what
+  the machine sent. That was the one thing nobody could do: the download route
+  resolved under the serial-keyed tree only, so nothing stored as unmatched had
+  a URL, and those rows were rendered as text with no link.
+  - The route names the tree it serves from, as
+    `/evidence/unmatched/<hostname>-<username>/<timestamp>/<file>` beside
+    `/evidence/submissions/<serial>/<timestamp>/<file>`. Links already filed in
+    a compliance sheet keep working: a three-segment path still means the
+    serial-keyed tree
+  - The round view links each unmatched submission's reports and archive beside
+    its reason
+  - Only the two trees the server writes are served. The `2026-03/` archive is
+    history it reads and never writes, and a path climbing out of a tree is
+    refused before any file is opened
+
 - **Every download is named for its asset.** The proof-file convention was
   applied only to the archive, so each asset's reports arrived as
   `lynis-report.json` - the same name fleet-wide, overwriting one another in a

@@ -172,15 +172,49 @@ class ServerHarness(unittest.TestCase):
         with urllib.request.urlopen(request) as response:
             return response.read().decode()
 
-    def download(self, serial, record_name, filename):
-        """Fetch one evidence file, returning (Content-Disposition, bytes)."""
+    def round_html(self, period=None):
+        """Fetch the round view as a dashboard user would."""
         credentials = b64encode(f'admin:{PASSWORD}'.encode()).decode()
-        url = (f'http://127.0.0.1:{self.port}/evidence/{serial}/'
-               f'{record_name}/{filename}')
+        query = f'?period={period}' if period else '/'
         request = urllib.request.Request(
-            url, headers={'Authorization': f'Basic {credentials}'})
+            f'http://127.0.0.1:{self.port}/{query}',
+            headers={'Authorization': f'Basic {credentials}'},
+        )
+        with urllib.request.urlopen(request) as response:
+            return response.read().decode()
+
+    def evidence_url(self, *segments):
+        return 'http://127.0.0.1:{}/evidence/{}'.format(
+            self.port, '/'.join(segments))
+
+    def download(self, *segments):
+        """Fetch one evidence file, returning (Content-Disposition, bytes).
+
+        Three segments are the serial-keyed form; four name the tree.
+        """
+        credentials = b64encode(f'admin:{PASSWORD}'.encode()).decode()
+        request = urllib.request.Request(
+            self.evidence_url(*segments),
+            headers={'Authorization': f'Basic {credentials}'})
         with urllib.request.urlopen(request) as response:
             return response.headers.get('Content-Disposition'), response.read()
+
+    def download_status(self, *segments):
+        """The status code the evidence route answers a path with."""
+        credentials = b64encode(f'admin:{PASSWORD}'.encode()).decode()
+        request = urllib.request.Request(
+            self.evidence_url(*segments),
+            headers={'Authorization': f'Basic {credentials}'})
+        try:
+            with urllib.request.urlopen(request) as response:
+                return response.status
+        except urllib.error.HTTPError as error:
+            error.read()
+            return error.code
+
+    def unmatched_records(self):
+        """Every submission.json written under the unmatched tree."""
+        return sorted((self.storage / 'unmatched').rglob('submission.json'))
 
     def health(self):
         """Fetch /health, which takes no authentication."""
@@ -599,6 +633,135 @@ class TestDownloadsAreNamedForTheirAsset(ServerHarness):
 
         self.assertNotEqual(first, second)
         self.assertNotIn('lynis-report.json', (first, second))
+
+
+class TestUnmatchedEvidenceIsReachable(ServerHarness):
+    """A machine that scanned and was credited to nobody had no URL.
+
+    The round view names two reasons - the client could not read the hardware,
+    or the register is behind - and both are settled by opening what the
+    machine sent. The route resolved under the serial-keyed tree only, so that
+    was the one thing nobody could do.
+    """
+
+    def submit_unmatched(self, serial=b'SERIALNOTINREGISTER\n', hostname='stranger'):
+        """Submit the real archive under a serial no register row claims."""
+        members = real_archive_members()
+        for name in list(members):
+            if name.endswith('hardware-serial.txt'):
+                if serial is None:
+                    del members[name]
+                else:
+                    members[name] = serial
+        status, body = self.submit(repack(members), hostname=hostname)
+        record = json.loads(self.unmatched_records()[0].read_text())
+        return status, body, record
+
+    def unmatched_dir(self):
+        paths = self.unmatched_records()
+        self.assertEqual(len(paths), 1, f"expected one record, got {paths}")
+        return paths[0].parent
+
+    def test_an_unmatched_report_downloads(self):
+        self.submit_unmatched()
+        record_dir = self.unmatched_dir()
+
+        disposition, payload = self.download(
+            'unmatched', record_dir.parent.name, record_dir.name,
+            'lynis-report.json')
+
+        self.assertTrue(payload)
+        self.assertIn('SERIALNOTINREGISTER', disposition)
+        self.assertIn('-lynis.json', disposition)
+
+    def test_the_archive_downloads_too(self):
+        """The tar is the whole of what arrived, so it is the file wanted."""
+        self.submit_unmatched()
+        record_dir = self.unmatched_dir()
+        archive = next(record_dir.glob('*.tar.gz'))
+
+        disposition, payload = self.download(
+            'unmatched', record_dir.parent.name, record_dir.name, archive.name)
+
+        self.assertEqual(payload, (record_dir / archive.name).read_bytes())
+        self.assertIn('.tar.gz', disposition)
+
+    def test_a_submission_with_no_serial_is_named_for_its_host(self):
+        """The reason the register cannot help: there is nothing to look up."""
+        _, _, record = self.submit_unmatched(serial=None, hostname='lobos')
+        self.assertEqual(record['unmatched_reason'], 'no_serial')
+        record_dir = self.unmatched_dir()
+
+        disposition, _ = self.download(
+            'unmatched', record_dir.parent.name, record_dir.name,
+            'lynis-report.json')
+
+        self.assertIn('lobos-wtoorren', disposition)
+        self.assertNotIn('"lynis-report.json"', disposition)
+
+    def test_the_round_view_links_it_beside_the_reason(self):
+        self.submit_unmatched()
+        record_dir = self.unmatched_dir()
+
+        html = self.round_html()
+
+        href = (f'/evidence/unmatched/{record_dir.parent.name}/'
+                f'{record_dir.name}/lynis-report.json')
+        self.assertIn(href, html)
+        self.assertIn('serial not in register', html)
+        # The link is inside the block for the reason, not loose on the page.
+        block = html.split('serial not in register', 1)[1]
+        self.assertIn(href, block.split('</div></div>', 1)[0])
+
+    def test_the_matched_link_is_the_tree_form_too(self):
+        """One shape for both trees; the record's own path is what names it."""
+        self.submit(REAL_ARCHIVE.read_bytes())
+        record_dir = self.records()[0].parent
+
+        html = self.round_html()
+
+        self.assertIn(
+            f'/evidence/submissions/{REAL_SERIAL}/{record_dir.name}/'
+            'lynis-report.json', html)
+
+
+class TestEvidenceRouteRefusesWhatItDoesNotServe(ServerHarness):
+    """Serving a second tree must not turn the route into a file browser."""
+
+    def test_the_three_segment_form_still_serves_a_matched_record(self):
+        """Links already filed in a compliance sheet keep working."""
+        self.submit(REAL_ARCHIVE.read_bytes())
+        record_dir = self.records()[0].parent
+
+        disposition, payload = self.download(
+            REAL_SERIAL, record_dir.name, 'lynis-report.json')
+
+        self.assertTrue(payload)
+        self.assertIn(REAL_ASSET_ID, disposition)
+
+    def test_the_period_archive_is_not_served(self):
+        """It is history the server reads and never writes."""
+        archived = self.storage / '2026-03' / 'oldhost-olduser'
+        archived.mkdir(parents=True)
+        (archived / 'lynis-report.json').write_text('{}')
+
+        self.assertEqual(
+            self.download_status('2026-03', 'oldhost-olduser',
+                                 'x', 'lynis-report.json'),
+            400)
+
+    def test_a_climbing_path_is_refused(self):
+        self.assertEqual(
+            self.download_status('unmatched', 'lobos-wtoorren', '..',
+                                 'submission.json'),
+            400)
+        self.assertEqual(self.download_status('..', 'etc', 'passwd'), 400)
+
+    def test_a_missing_record_is_not_found_rather_than_refused(self):
+        self.assertEqual(
+            self.download_status('unmatched', 'nobody-nowhere',
+                                 '2026-09-17T09-00-00', 'lynis-report.json'),
+            404)
 
 
 if __name__ == '__main__':

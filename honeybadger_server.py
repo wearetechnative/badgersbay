@@ -17,9 +17,9 @@ import argparse
 import secrets
 import base64
 from datetime import datetime, date, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import unquote, parse_qs
+from urllib.parse import unquote, quote, parse_qs
 from html import escape as html_escape
 import logging
 
@@ -810,6 +810,133 @@ REQUIREMENT_SATISFIED_BY = {
 # on is the fastest way to teach people to ignore a dashboard. See bean
 # wtoorren-cikq.
 MANUAL_CLASSES = {'windows'}
+
+# The trees the server writes, and the only ones the evidence route serves. The
+# period directories are history the server reads and never writes, and are
+# reached through the legacy report route instead. Naming the tree in the path
+# rather than trying a key against each in turn keeps the two keyings apart:
+# `submissions/` is keyed on a hardware serial and `unmatched/` on
+# `hostname-username`, and nothing forbids a serial from looking like one.
+EVIDENCE_TREES = ('submissions', 'unmatched')
+
+
+def parse_evidence_path(parts):
+    """Split the segments after `/evidence/` into (tree, key, record, filename).
+
+    Four segments name the tree explicitly. Three name a record under the
+    serial-keyed tree: that is the shape of every link emitted before the
+    unmatched tree was served, and of any URL already filed in a compliance
+    sheet, so it keeps working.
+
+    Returns None for anything else - an unserved tree, a wrong number of
+    segments, or a segment that could climb out of one. The tree is matched
+    against a list rather than used as a path component, so a caller cannot
+    reach a directory by naming it.
+
+    Examples:
+        >>> parse_evidence_path(['PF50L2MR', '2026-09-17T09-00-00',
+        ...                      'lynis-report.json'])
+        ('submissions', 'PF50L2MR', '2026-09-17T09-00-00', 'lynis-report.json')
+        >>> parse_evidence_path(['unmatched', 'lobos-wtoorren',
+        ...                      '2026-09-17T09-00-00', 'lynis-report.json'])
+        ('unmatched', 'lobos-wtoorren', '2026-09-17T09-00-00', 'lynis-report.json')
+
+        The read-only period archive is not one of the served trees:
+
+        >>> parse_evidence_path(['2026-03', 'lobos-wtoorren',
+        ...                      '2026-03-16', 'lynis-report.json'])
+
+        Neither is anything that climbs, is empty, or carries a separator:
+
+        >>> parse_evidence_path(['..', 'etc', 'passwd'])
+        >>> parse_evidence_path(['unmatched', 'lobos-wtoorren', '..', 'x.json'])
+        >>> parse_evidence_path(['PF50L2MR', '', 'lynis-report.json'])
+        >>> parse_evidence_path(['PF50L2MR', 'a/b', 'lynis-report.json'])
+        >>> parse_evidence_path(['PF50L2MR', 'lynis-report.json'])
+    """
+    if len(parts) == 3:
+        tree, rest = 'submissions', list(parts)
+    elif len(parts) == 4:
+        tree, rest = parts[0], list(parts[1:])
+    else:
+        return None
+    if tree not in EVIDENCE_TREES:
+        return None
+    for segment in rest:
+        if segment in ('', '.', '..') or '/' in segment or os.sep in segment:
+            return None
+    return (tree, rest[0], rest[1], rest[2])
+
+
+def evidence_href(record, filename):
+    """Link to one file of a submission record, or None when it is not served.
+
+    The path is built from where the record was written rather than from what
+    it resolved to. An unmatched submission has no register entry to take a
+    serial from, which is the whole reason it had no link; and in the matched
+    case the register's spelling of a serial and the client's need not agree.
+
+    Examples:
+        >>> evidence_href({'source': 'submissions',
+        ...                'record_dir': '/srv/reports/submissions/PF50L2MR/'
+        ...                              '2026-09-17T09-00-00'},
+        ...               'lynis-report.json')
+        '/evidence/submissions/PF50L2MR/2026-09-17T09-00-00/lynis-report.json'
+        >>> evidence_href({'source': 'unmatched',
+        ...                'record_dir': '/srv/reports/unmatched/lobos-wtoorren/'
+        ...                              '2026-09-17T09-00-00'},
+        ...               'honeybadger-20260917-090000.tar.gz')
+        '/evidence/unmatched/lobos-wtoorren/2026-09-17T09-00-00/honeybadger-20260917-090000.tar.gz'
+
+        A record from the read-only period archive is served nowhere through
+        this route, and says so rather than offering a link that 404s:
+
+        >>> evidence_href({'source': 'archive',
+        ...                'record_dir': '/srv/reports/2026-03/lobos-wtoorren'},
+        ...               'lynis-report.json') is None
+        True
+        >>> evidence_href({'source': 'submissions'}, 'lynis-report.json') is None
+        True
+        >>> evidence_href(None, 'lynis-report.json') is None
+        True
+    """
+    if not isinstance(record, dict):
+        return None
+    source, record_dir = record.get('source'), record.get('record_dir')
+    if source not in EVIDENCE_TREES or not record_dir:
+        return None
+    path = PurePosixPath(str(record_dir))
+    return '/evidence/{}/{}/{}/{}'.format(
+        quote(source, safe=''), quote(path.parent.name, safe=''),
+        quote(path.name, safe=''), quote(filename, safe=''))
+
+
+def evidence_badges_html(record):
+    """The download links for one submission record, as report badges.
+
+    Shared by the per-asset table and the unmatched block, which show the same
+    thing about different records. A file the evidence route does not serve is
+    still named - as text rather than as a link, the way a report with no known
+    filename already was.
+    """
+    if not record:
+        return '<span class="badge none">none</span>'
+    out = []
+    for report_type in record.get('reports', []):
+        label = html_escape(report_type[0].upper())
+        filename = REPORT_FILENAMES.get(report_type)
+        href = evidence_href(record, filename) if filename else None
+        if href:
+            out.append(f'<a class="badge" href="{html_escape(href)}">{label}</a>')
+        else:
+            out.append(f'<span class="badge">{label}</span>')
+    if record.get('evidence'):
+        href = evidence_href(record, record['evidence'])
+        if href:
+            out.append(f'<a class="badge tar" href="{html_escape(href)}">TAR</a>')
+        else:
+            out.append('<span class="badge tar">TAR</span>')
+    return ''.join(out) or '<span class="badge none">none</span>'
 
 
 def evidence_download_name(filename, record):
@@ -2767,11 +2894,16 @@ class ReportHandler(BaseHTTPRequestHandler):
                     'The serial is not in the register. That is a register problem: a new '
                     'asset, a department outside scope, or a wrong serial column.'
                 )
+                # The evidence is linked beside the reason because both
+                # reasons are settled the same way: by reading what the machine
+                # sent. A record from the read-only period archive has no link
+                # to offer and shows its badges as plain text.
                 rows = ''.join(
                     f'<div class="mono" style="font-size:12.5px">'
                     f'{html_escape(record["hostname"])}/{html_escape(record["username"])} '
                     f'&middot; {html_escape(str(record["serial"] or "no serial"))} '
-                    f'&middot; {html_escape(record["submitted_at"][:16])}</div>'
+                    f'&middot; {html_escape(record["submitted_at"][:16])} '
+                    f'{evidence_badges_html(record)}</div>'
                     for record in records
                 )
                 blocks.append(
@@ -2858,25 +2990,6 @@ class ReportHandler(BaseHTTPRequestHandler):
                 return '<span class="dash">never</span>'
             return html_escape(record['submitted_at'][:10])
 
-        def badges(record, entry):
-            if not record:
-                return '<span class="badge none">none</span>'
-            out = []
-            for report_type in record.get('reports', []):
-                filename = REPORT_FILENAMES.get(report_type)
-                if filename and record.get('record_dir'):
-                    href = f"/evidence/{html_escape(entry['serial'])}/" \
-                           f"{html_escape(os.path.basename(record['record_dir']))}/{filename}"
-                    out.append(f'<a class="badge" href="{href}">{report_type[0].upper()}</a>')
-                else:
-                    out.append(f'<span class="badge">{report_type[0].upper()}</span>')
-            if record.get('evidence'):
-                href = f"/evidence/{html_escape(entry['serial'])}/" \
-                       f"{html_escape(os.path.basename(record['record_dir']))}/" \
-                       f"{html_escape(record['evidence'])}"
-                out.append(f'<a class="badge tar" href="{href}">TAR</a>')
-            return ''.join(out) or '<span class="badge none">none</span>'
-
         groups = []
         if state['scanned']:
             rows = []
@@ -2892,7 +3005,7 @@ class ReportHandler(BaseHTTPRequestHandler):
                               f'<span class="sub">missing: {html_escape(", ".join(row["missing"]))}</span>'
                               f'{late}{owner_warning}')
                 rows.append(row_html(row, 's-ok' if row['complete'] else 's-open', status,
-                                     badges(row['record'], row['entry']),
+                                     evidence_badges_html(row['record']),
                                      html_escape(row['record']['submitted_at'][:10])))
             groups.append((f"Scanned this round &mdash; {len(state['scanned'])}", rows))
 
@@ -3892,16 +4005,18 @@ class ReportHandler(BaseHTTPRequestHandler):
             logger.info("Dashboard sent successfully")
         elif self.path.startswith('/evidence/'):
             # Serve a file from one submission record.
-            # /evidence/<serial>/<timestamp>/<filename>
+            # /evidence/<tree>/<key>/<timestamp>/<filename>, or the older
+            # three-segment form, which means the serial-keyed tree.
             try:
                 parts = [unquote(p) for p in self.path[len('/evidence/'):].split('/')]
-                if len(parts) != 3 or any(p in ('', '.', '..') or '/' in p for p in parts):
+                parsed = parse_evidence_path(parts)
+                if parsed is None:
                     self._send_html_error(400, "Malformed evidence path")
                     return
 
-                serial, stamp, filename = parts
-                base = (Path(self.config.storage_location) / 'submissions').resolve()
-                target = (base / serial / stamp / filename).resolve()
+                tree, key, stamp, filename = parsed
+                base = (Path(self.config.storage_location) / tree).resolve()
+                target = (base / key / stamp / filename).resolve()
                 if not str(target).startswith(str(base) + os.sep) or not target.is_file():
                     self._send_html_error(404, "Evidence not found")
                     return

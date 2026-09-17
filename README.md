@@ -262,6 +262,14 @@ A submission that cannot be attributed is stored, never rejected. The two ways
 that happens need different fixes and are reported separately: `no_serial` is a
 client problem, `serial_not_in_register` is a register problem.
 
+Both are settled by reading what the machine actually sent, so the round view
+links each unmatched submission's reports and archive beside its reason. The
+evidence route names the tree it serves from -
+`/evidence/unmatched/<hostname>-<username>/<timestamp>/<file>` beside
+`/evidence/submissions/<serial>/<timestamp>/<file>` - and serves only the two
+trees the server writes. The `2026-03/` archive is history it reads and never
+writes, and is not reachable through it.
+
 ## The Audit's Findings
 
 The client determines the values the ISO register needs and ships them in
