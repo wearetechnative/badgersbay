@@ -2,12 +2,12 @@
 
 ## 1. Build the register
 
-- [ ] 1.1 Write the thirteen rows below, with the issue dates from the ISO tool
+- [x] 1.1 Write the thirteen rows below, with the issue dates from the ISO tool
       as both `owner_since` and `valid_from`
-- [ ] 1.2 Drop the two-row `TARI-00037` construction; Pankhuri Prakash keeps
+- [x] 1.2 Drop the two-row `TARI-00037` construction; Pankhuri Prakash keeps
       `PF3NFHJL` and never swapped
-- [ ] 1.3 `TARI-00031` carries `YD063JGA`, not `AC06CMEP`
-- [ ] 1.4 Update `assets.csv.example` to match the shape, with invented names
+- [x] 1.3 `TARI-00031` carries `YD063JGA`, not `AC06CMEP`
+- [x] 1.4 Update `assets.csv.example` to match the shape, with invented names
       and serials - it is committed to a public repository
 
 | asset_id | serial | owner | class | owner_since |
@@ -25,6 +25,16 @@
 | TARI-00042 | 190856402801887 | Pim Snel | linux | 2025-03-17 |
 | TARI-00045 | FRANDGCPA5530200H9 | Jeroen Penders | linux | 2025-10-22 |
 | TARI-00046 | FRANDGCPA550730052 | Luca Kasper | linux | 2025-03-20 |
+
+The register itself is written to the session scratchpad rather than to the
+repository: it pairs employee names with hardware serials, which is the reason
+it is delivered as a secret. Verified against the real loader - 13 rows, 13
+assets, 13 active; `PF50L2MR`, `YD063JGA` and `MP1Y69AC` each resolve to the
+right asset and owner, and `AC06CMEP` resolves to nothing.
+
+For the round 2026-09 (scan window 2026-09-01 to 2026-10-29) the loader puts
+all 13 in scope, of which 3 are Windows and therefore manual: a denominator of
+10.
 
 ## 2. Deliver it
 
