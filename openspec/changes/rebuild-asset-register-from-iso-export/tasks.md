@@ -38,22 +38,24 @@ all 13 in scope, of which 3 are Windows and therefore manual: a denominator of
 
 ## 2. Deliver it
 
-- [ ] 2.1 Encrypt with `ragenx -e` from the directory holding `secrets.nix`
-- [ ] 2.2 Verify the round trip: `ragenx -d` must return the input byte for byte
-- [ ] 2.3 Deploy compute2 and restart badgersbay - the register is read at
+- [x] 2.1 Encrypt with `ragenx -e` from the directory holding `secrets.nix`
+- [x] 2.2 Verify the round trip: `ragenx -d` must return the input byte for byte
+- [x] 2.3 Deploy compute2 and restart badgersbay - the register is read at
       startup, and a deploy alone does not restart the service
       (`elastinix-qxvt`)
 
 ## 3. Verify against a running round
 
-- [ ] 3.1 The service starts; a register it cannot trust is a failed start, not
+- [x] 3.1 The service starts; a register it cannot trust is a failed start, not
       a silent skip
 - [ ] 3.2 The round view shows ten assets in the denominator and three Windows
       machines as manual
 - [ ] 3.3 Wouter's existing submission still matches `TARI-00023` - it is the
       only asset currently scanning, so it is the regression test
-- [ ] 3.4 The disappeared-asset report names the four rows the previous register
-      held, rather than passing over them
+- [ ] 3.4 The disappeared-asset report stays silent. `_detect_disappeared()`
+      computes `previous - current` on `asset_id`, and all four ids the previous
+      register held are among the thirteen, so the register grew and nothing
+      went. A report appearing here would mean an asset was dropped.
 
 ## 4. Raise upstream, do not fix here
 
