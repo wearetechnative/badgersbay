@@ -42,7 +42,7 @@ all 13 in scope, of which 3 are Windows and therefore manual: a denominator of
 - [ ] 2.2 Verify the round trip: `ragenx -d` must return the input byte for byte
 - [ ] 2.3 Deploy compute2 and restart badgersbay - the register is read at
       startup, and a deploy alone does not restart the service
-      (`elastinix-p8u9`)
+      (`elastinix-qxvt`)
 
 ## 3. Verify against a running round
 
