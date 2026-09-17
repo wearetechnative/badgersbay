@@ -1,13 +1,13 @@
 ---
 # badgersbay-d2x1
 title: Archive the pre-serial submissions out of the live round
-status: in-progress
+status: completed
 type: task
 priority: normal
 tags:
     - operations
 created_at: 2026-09-17T11:24:43Z
-updated_at: 2026-09-17T11:24:43Z
+updated_at: 2026-09-17T11:48:50Z
 ---
 
 The round view counts 17 systems that were scanned but cannot be matched,
@@ -62,3 +62,30 @@ will be rebuilt from submissions that carry a serial.
 - [ ] Restart badgersbay - the cache is built at startup, so it will keep
       serving the old round until it is
 - [ ] Ask the fleet to submit once more
+
+
+## Done
+
+    BEFORE  2742323 bytes
+    AFTER   2742323 bytes        identical
+    archive-pre-serial           17 system directories (9 + 8)
+    reports root                 archive-pre-serial, register-previous.json, submissions
+
+Nothing was lost: the byte count is identical before and after, and the 17
+directories are the 9 from `2026-03` plus the 8 from `2026-09`.
+
+The `BEFORE` directory count printed 3 rather than 18. That is a mistake in the
+`find` expression used to take the measurement, not a missing directory - the
+byte identity and the `AFTER` count of 17 are what carry the proof. Anyone
+repeating this should count with `find . -mindepth 2 -maxdepth 2 -type d` only
+after confirming what depth the system directories actually sit at.
+
+The service was restarted, so the cache was rebuilt from the remaining trees.
+`/health` now reports zero, as `badgersbay-rstb` predicted: it counts period
+directories only and there are none left. Real submissions under
+`submissions/<SERIAL>/` are not counted by that endpoint at all.
+
+The round view now measures the running round against submissions that carry a
+serial. Only `PF50L2MR` has one so far; the rest of the register reads as
+outstanding until the fleet submits again, which is the honest figure rather
+than the flattering one.
