@@ -19,7 +19,7 @@ import base64
 from datetime import datetime, date, timedelta
 from pathlib import Path, PurePosixPath
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import unquote, quote, parse_qs
+from urllib.parse import unquote, quote, parse_qs, urlencode
 from html import escape as html_escape
 import logging
 
@@ -1070,6 +1070,319 @@ def selectable_rounds(submitted_periods, current_period):
     if current_period:
         rounds.add(current_period)
     return sorted(rounds, reverse=True)
+
+
+# The states the round view can be narrowed to, in the order the table builds
+# its sections. `accounted` joins the two buckets that resolve an asset without
+# evidence - a recorded exception and a departure with a reason - because they
+# read as one section and as one segment in the meter. They stay apart in the
+# data for the reason they always did; only the filter joins them.
+ROUND_FILTER_STATES = (
+    ('scanned', 'scanned', ('scanned',)),
+    ('accounted', 'accounted for', ('excepted', 'accounted')),
+    ('outstanding', 'outstanding', ('outstanding',)),
+    ('unexplained', 'left scope without a reason', ('unexplained',)),
+    ('manual', 'manual', ('manual',)),
+    ('retired', 'retired', ('retired',)),
+)
+
+# Every bucket the table renders, which is what a filter narrows and what the
+# hidden count is measured against. The denominator is a different number on
+# purpose: manual and retired assets are outside it.
+ROUND_TABLE_BUCKETS = ('scanned', 'excepted', 'accounted', 'outstanding',
+                       'unexplained', 'manual', 'retired')
+
+# What a register row with no owner is called. The progress panel already uses
+# this word, so the filter a bar links to has to accept it.
+UNASSIGNED = 'unassigned'
+
+
+def search_key(value):
+    """Fold a value to what a reader typing it can be expected to get right.
+
+    Case and separators go; nothing else does. This is the whole reason the
+    search term exists: `normalise_serial()` uppercases and strips whitespace
+    but leaves separators alone, so a serial written with the hyphen the ISO
+    tool uses and the same serial as the machine reports it are different
+    strings in the register. Folded this way they are one.
+
+    Examples:
+        >>> search_key('MP1Y-69AC')
+        'mp1y69ac'
+        >>> search_key('mp1y69ac') == search_key('MP1Y-69 AC')
+        True
+        >>> search_key('TARI-00031')
+        'tari00031'
+        >>> search_key(None)
+        ''
+    """
+    return re.sub(r'[^a-z0-9]', '', (value or '').lower())
+
+
+def parse_round_filters(params):
+    """Read the round view's filter from a parsed query string.
+
+    Returns the four terms with anything unusable absent, so the caller never
+    has to tell "not given" from "given as blank" - a select submitting an
+    empty option is the ordinary case, not a filter matching nothing.
+
+    A state outside the view's own vocabulary is dropped rather than honoured,
+    and kept in `dropped` so the view can say so. An empty page that reads
+    exactly like a finished round is the worst answer to a typo in a URL.
+
+    Examples:
+        >>> parse_round_filters({'state': ['outstanding']})['state']
+        'outstanding'
+        >>> parse_round_filters({'state': ['']})['state'] is None
+        True
+        >>> parse_round_filters({'state': ['nonsense']})['dropped']
+        [('state', 'nonsense')]
+        >>> parse_round_filters({'owner': ['  Pim Snel  ']})['owner']
+        'Pim Snel'
+        >>> parse_round_filters({'class': ['LINUX']})['class']
+        'linux'
+        >>> parse_round_filters({'q': ['  TARI-00031 ']})['q']
+        'TARI-00031'
+
+    A search of separators alone is no search:
+
+        >>> parse_round_filters({'q': ['---']})['q'] is None
+        True
+
+    And nothing given is a filter with nothing in it:
+
+        >>> sorted(parse_round_filters({}))
+        ['class', 'dropped', 'owner', 'q', 'state']
+        >>> any(parse_round_filters({})[term] for term in ('state', 'owner', 'class', 'q'))
+        False
+    """
+    def one(name):
+        values = (params or {}).get(name) or ['']
+        return (values[0] or '').strip()
+
+    dropped = []
+
+    state = one('state').lower()
+    if state and state not in {key for key, _, _ in ROUND_FILTER_STATES}:
+        dropped.append(('state', state))
+        state = ''
+
+    q = one('q')
+    if not search_key(q):
+        q = ''
+
+    return {
+        'state': state or None,
+        'owner': one('owner') or None,
+        'class': one('class').lower() or None,
+        'q': q or None,
+        'dropped': dropped,
+    }
+
+
+def round_filter_terms(filters):
+    """The active terms, as (label, value) pairs for a reader.
+
+    Examples:
+        >>> round_filter_terms({'state': 'outstanding', 'owner': 'Pim Snel'})
+        [('state', 'outstanding'), ('owner', 'Pim Snel')]
+        >>> round_filter_terms({'q': 'TARI-00031'})
+        [('matching', 'TARI-00031')]
+        >>> round_filter_terms({})
+        []
+    """
+    filters = filters or {}
+    labels = {key: label for key, label, _ in ROUND_FILTER_STATES}
+    terms = []
+    if filters.get('state'):
+        terms.append(('state', labels.get(filters['state'], filters['state'])))
+    if filters.get('owner'):
+        terms.append(('owner', filters['owner']))
+    if filters.get('class'):
+        terms.append(('class', filters['class']))
+    if filters.get('q'):
+        terms.append(('matching', filters['q']))
+    return terms
+
+
+def round_view_href(period, filters=None, **overrides):
+    """The address of the round view for one round under one filter.
+
+    Overrides replace a term for this link only, which is how an owner bar
+    links to its own owner without losing the round or the other terms. Passing
+    None for a term drops it, which is how the way back to the whole round is
+    built.
+
+    Examples:
+        >>> round_view_href('2026-09')
+        '/?view=round&period=2026-09'
+        >>> round_view_href('2026-09', {'state': 'outstanding'})
+        '/?view=round&period=2026-09&state=outstanding'
+        >>> round_view_href('2026-09', {'state': 'outstanding'}, owner='Pim Snel')
+        '/?view=round&period=2026-09&state=outstanding&owner=Pim+Snel'
+        >>> round_view_href('2026-09', {'owner': 'Pim Snel'}, owner=None)
+        '/?view=round&period=2026-09'
+    """
+    terms = dict(filters or {})
+    terms.pop('dropped', None)
+    terms.update(overrides)
+    query = [('view', 'round'), ('period', period or '')]
+    query += [(name, terms[name]) for name in ('state', 'owner', 'class', 'q')
+              if terms.get(name)]
+    return '/?' + urlencode(query)
+
+
+def round_row_entry(item):
+    """The register entry behind one table item.
+
+    The buckets hold rows wrapping an entry; retired assets are entries on
+    their own, because there is no submission to pair them with.
+
+    Examples:
+        >>> round_row_entry({'entry': {'asset_id': 'TARI-00001'}})['asset_id']
+        'TARI-00001'
+        >>> round_row_entry({'asset_id': 'TARI-00002'})['asset_id']
+        'TARI-00002'
+    """
+    return item.get('entry', item)
+
+
+def round_row_matches(item, filters):
+    """Does one asset survive the owner, class and text terms?
+
+    State is not asked here: it selects whole sections, which is done where the
+    sections are, not per row.
+
+    Examples:
+        >>> pim = {'entry': {'asset_id': 'TARI-00031', 'serial': 'MP1Y-69AC',
+        ...                  'owner': 'Pim Snel', 'class': 'windows'}}
+        >>> round_row_matches(pim, {})
+        True
+        >>> round_row_matches(pim, {'owner': 'pim snel'})
+        True
+        >>> round_row_matches(pim, {'owner': 'Wouter van der Toorren'})
+        False
+        >>> round_row_matches(pim, {'class': 'linux'})
+        False
+
+    The serial is found however the reader spells it, and the asset id by any
+    part of it:
+
+        >>> round_row_matches(pim, {'q': 'mp1y69ac'})
+        True
+        >>> round_row_matches(pim, {'q': '00031'})
+        True
+
+    An asset with no owner answers to the name the progress panel gives it:
+
+        >>> round_row_matches({'entry': {'owner': '', 'asset_id': 'TARI-00002',
+        ...                              'serial': 'X1', 'class': 'linux'}},
+        ...                   {'owner': 'unassigned'})
+        True
+    """
+    filters = filters or {}
+    entry = round_row_entry(item)
+
+    owner = filters.get('owner')
+    if owner:
+        held = (entry.get('owner') or '').strip()
+        wanted = owner.strip().casefold()
+        if held.casefold() != wanted and not (
+                not held and wanted == UNASSIGNED):
+            return False
+
+    asset_class = filters.get('class')
+    if asset_class and (entry.get('class') or '').lower() != asset_class.lower():
+        return False
+
+    q = filters.get('q')
+    if q:
+        needle = search_key(q)
+        haystacks = (search_key(entry.get('asset_id')),
+                     search_key(entry.get('serial')))
+        if not any(needle in hay for hay in haystacks):
+            return False
+
+    return True
+
+
+def filter_round_state(state, filters):
+    """A narrowed copy of the round, for the table and for nothing else.
+
+    The bucket lists are narrowed; every other key - the denominator, the
+    window dates, whether the round is closeable - is carried through
+    untouched, because a filter is a question about the table and those are
+    statements about the round. The caller renders its figures from the state
+    it already has and hands only this to the table, so there is no path by
+    which a filter reaches a compliance number.
+
+    The copy carries a `filter` block saying what is active, how much is shown
+    and how much is hidden, which is what keeps an empty table from being read
+    as an empty round.
+
+    Examples:
+        >>> state = {'denominator': 3, 'scanned': [{'entry': {'owner': 'A'}}],
+        ...          'outstanding': [{'entry': {'owner': 'B'}},
+        ...                          {'entry': {'owner': 'A'}}],
+        ...          'excepted': [], 'accounted': [], 'unexplained': [],
+        ...          'manual': [], 'retired': []}
+        >>> narrowed = filter_round_state(state, {'state': 'outstanding'})
+        >>> narrowed['scanned'], len(narrowed['outstanding'])
+        ([], 2)
+
+    The round's own figures are the round's, whatever the table shows:
+
+        >>> narrowed['denominator']
+        3
+        >>> state['scanned']
+        [{'entry': {'owner': 'A'}}]
+
+    And the copy says what it is hiding:
+
+        >>> narrowed['filter']['shown'], narrowed['filter']['hidden']
+        (2, 1)
+
+    Terms compose:
+
+        >>> both = filter_round_state(state, {'state': 'outstanding', 'owner': 'A'})
+        >>> both['filter']['shown'], both['filter']['hidden']
+        (1, 2)
+
+    With no filter nothing is hidden and nothing is announced:
+
+        >>> plain = filter_round_state(state, {})
+        >>> plain['filter']['active'], plain['filter']['hidden']
+        (False, 0)
+    """
+    filters = filters or {}
+    selected = filters.get('state')
+    keep = None
+    for key, _, buckets in ROUND_FILTER_STATES:
+        if key == selected:
+            keep = set(buckets)
+
+    narrowed = dict(state)
+    shown = total = 0
+    for bucket in ROUND_TABLE_BUCKETS:
+        items = state.get(bucket) or []
+        total += len(items)
+        if keep is not None and bucket not in keep:
+            narrowed[bucket] = []
+            continue
+        kept = [item for item in items if round_row_matches(item, filters)]
+        narrowed[bucket] = kept
+        shown += len(kept)
+
+    terms = round_filter_terms(filters)
+    narrowed['filter'] = {
+        'active': bool(terms),
+        'terms': terms,
+        'shown': shown,
+        'total': total,
+        'hidden': total - shown if terms else 0,
+        'dropped': list(filters.get('dropped') or []),
+    }
+    return narrowed
 
 
 def owner_to_slug(owner):
@@ -2766,6 +3079,26 @@ class ReportHandler(BaseHTTPRequestHandler):
         .owner .ct{font-size:12px;color:var(--ink-2);text-align:right}
         .owner.done .ct{color:var(--ok);font-weight:600}
         .owner.zero .nm{font-weight:600}.owner.zero .ct{color:var(--crit)}
+        a.owner{color:inherit;text-decoration:none;border-radius:4px;
+          padding:2px 6px;margin:-2px -6px}
+        a.owner:hover{background:var(--surface-2)}
+        a.owner:hover .nm{text-decoration:underline}
+        a.owner.sel{background:var(--accent-soft)}
+        a.owner.sel .nm{font-weight:600}
+        .filters{display:flex;flex-wrap:wrap;align-items:center;gap:7px 10px;
+          background:var(--surface);border:1px solid var(--line);border-radius:6px;
+          padding:12px 16px;margin-bottom:18px;font-size:12.5px;color:var(--ink-2)}
+        .filters select,.filters input{background:var(--surface);color:var(--ink);
+          border:1px solid var(--line);border-radius:4px;padding:3px 6px;
+          font-family:inherit;font-size:12.5px}
+        .filters input[type=search]{min-width:160px}
+        .filters button{background:var(--surface-2);color:var(--ink);
+          border:1px solid var(--line);border-radius:4px;padding:3px 11px;
+          font-family:inherit;font-size:12.5px;cursor:pointer}
+        .filters button:hover{background:var(--accent-soft)}
+        .reset{margin-left:auto;font-size:12.5px;color:var(--accent)}
+        .alert.filt{border-left-color:var(--accent)}
+        .alert .reset{margin-left:0;display:inline-block}
         .alert{border:1px solid var(--line);border-left:3px solid var(--warn);
           background:var(--surface);border-radius:5px;padding:14px 18px;margin-bottom:26px}
         .alert h3{margin:0 0 4px;font-size:13.5px;font-weight:600}
@@ -2822,8 +3155,13 @@ class ReportHandler(BaseHTTPRequestHandler):
           cursor:help}
     """
 
-    def _dashboard_shell(self, title, active_tab, period, body):
-        """Wrap a view in the shared page shell."""
+    def _dashboard_shell(self, title, active_tab, period, body, carry=None):
+        """Wrap a view in the shared page shell.
+
+        `carry` is a list of (name, value) the round selector should take along,
+        so that changing the round keeps the question the reader was asking
+        rather than dropping them back into the whole round.
+        """
         register = self.asset_register
         register_note = (
             f"Register: {len(register.rows)} rows"
@@ -2850,9 +3188,15 @@ class ReportHandler(BaseHTTPRequestHandler):
             f'{" selected" if r == period else ""}>{html_escape(r)}</option>'
             for r in selectable_rounds(submitted, period)
         )
+        carried = ''.join(
+            f'<input type="hidden" name="{html_escape(name)}" '
+            f'value="{html_escape(str(value))}">'
+            for name, value in (carry or []) if value
+        )
         rounds = (
             f'<form class="rounds" method="get" action="/">'
             f'<input type="hidden" name="view" value="{html_escape(active_tab)}">'
+            f'{carried}'
             f'<label for="period">Round</label>'
             f'<select id="period" name="period">{options}</select>'
             f'<button type="submit">Show</button>'
@@ -2871,8 +3215,16 @@ class ReportHandler(BaseHTTPRequestHandler):
   {body}
 </div></body></html>"""
 
-    def generate_round_view_html(self, period):
-        """Progress of one audit round against the asset register."""
+    def generate_round_view_html(self, period, filters=None):
+        """Progress of one audit round against the asset register.
+
+        Everything above the table - the headline, the meter, the per-owner
+        bars, the alerts - is rendered from `state`, which never learns about
+        the filter. The narrowed copy is built afterwards and reaches only the
+        table. That ordering is the reason `1 of 10 assets scanned` cannot
+        become a statement about what the reader was looking at.
+        """
+        filters = filters or {}
         state = compute_round_state(
             self.asset_register, self.compliance_cache, period,
             self.config.audit_months, self.config.grace_weeks,
@@ -2910,11 +3262,24 @@ class ReportHandler(BaseHTTPRequestHandler):
                 tally[1] += 1
                 if is_resolved:
                     tally[0] += 1
+        # The bars already look pressable and already carry the count, so they
+        # are the filter control for owners. They keep reporting the round
+        # while they do it: every owner stays listed with their own figure,
+        # whatever the table below has been narrowed to.
+        def owner_bar(name, done, total_owned):
+            selected = (filters.get('owner') or '').strip().casefold() == name.casefold()
+            css = 'done' if done == total_owned else 'zero' if done == 0 else ''
+            return (
+                f'<a class="owner {css}{" sel" if selected else ""}" '
+                f'href="{html_escape(round_view_href(period, filters, owner=name))}">'
+                f'<span class="nm">{html_escape(name)}</span>'
+                f'<span class="bar">'
+                f'<span style="width:{done / total_owned * 100:.0f}%"></span></span>'
+                f'<span class="ct mono">{done}/{total_owned}</span></a>'
+            )
+
         owner_rows = ''.join(
-            f'<div class="owner {"done" if d == t else "zero" if d == 0 else ""}">'
-            f'<span class="nm">{html_escape(name)}</span>'
-            f'<span class="bar"><span style="width:{d / t * 100:.0f}%"></span></span>'
-            f'<span class="ct mono">{d}/{t}</span></div>'
+            owner_bar(name, d, t)
             for name, (d, t) in sorted(owners.items(), key=lambda kv: (kv[1][0] / kv[1][1], kv[0]))
         )
 
@@ -3011,10 +3376,122 @@ class ReportHandler(BaseHTTPRequestHandler):
                 f'move by accident.</p>{rows}</div>'
             )
 
+        # Only now, with every figure already rendered, is the filter applied.
+        narrowed = filter_round_state(state, filters)
+
         return self._dashboard_shell(
             'Badgersbay Scan Round', 'round', period,
-            summary + alerts + self._round_table(state, period)
+            summary + alerts + self._filter_bar(state, period, filters)
+            + self._filter_notice(narrowed, period)
+            + self._round_table(narrowed, period),
+            carry=[(name, filters.get(name))
+                   for name in ('state', 'owner', 'class', 'q')],
         )
+
+    def _filter_bar(self, state, period, filters):
+        """The control that narrows the table.
+
+        A GET form, for the same reason the round selector is one: it works
+        without scripting, produces an address that survives a reload and can
+        be pasted, and can be tested by reading HTML.
+
+        The owner and class options come from the assets actually in this
+        round, so the control never offers a question with no answer.
+        """
+        entries = [round_row_entry(item)
+                   for bucket in ROUND_TABLE_BUCKETS
+                   for item in (state.get(bucket) or [])]
+        owners = sorted({(entry.get('owner') or '').strip() or UNASSIGNED
+                         for entry in entries}, key=str.casefold)
+        classes = sorted({(entry.get('class') or '').lower()
+                          for entry in entries if entry.get('class')})
+
+        def options(values, chosen, any_label):
+            out = [f'<option value="">{any_label}</option>']
+            for value in values:
+                selected = ' selected' if (chosen or '').casefold() == value.casefold() else ''
+                out.append(f'<option value="{html_escape(value)}"{selected}>'
+                           f'{html_escape(value)}</option>')
+            return ''.join(out)
+
+        # The state select submits the bucket name and shows the reader's word
+        # for it, which is the one the table's own section headings use.
+        states = '<option value="">Any state</option>' + ''.join(
+            f'<option value="{key}"'
+            f'{" selected" if filters.get("state") == key else ""}>'
+            f'{html_escape(label)}</option>'
+            for key, label, _ in ROUND_FILTER_STATES
+        )
+
+        reset = (
+            f'<a class="reset" href="{html_escape(round_view_href(period))}">'
+            f'Show the whole round</a>'
+            if any(filters.get(name) for name in ('state', 'owner', 'class', 'q')) else ''
+        )
+        return f"""
+  <form class="filters" method="get" action="/">
+    <input type="hidden" name="view" value="round">
+    <input type="hidden" name="period" value="{html_escape(period)}">
+    <label for="f-state">State</label>
+    <select id="f-state" name="state">{states}</select>
+    <label for="f-owner">Owner</label>
+    <select id="f-owner" name="owner">{options(owners, filters.get('owner'), 'Any owner')}</select>
+    <label for="f-class">Class</label>
+    <select id="f-class" name="class">{options(classes, filters.get('class'), 'Any class')}</select>
+    <label for="f-q">Find</label>
+    <input id="f-q" type="search" name="q" maxlength="60"
+           value="{html_escape(filters.get('q') or '')}" placeholder="Asset id or serial">
+    <button type="submit">Filter</button>{reset}
+  </form>"""
+
+    def _filter_notice(self, narrowed, period):
+        """What the filter is and what it is keeping off the page.
+
+        An empty table under a filter and an empty round look identical and
+        mean opposite things - nobody matching the question, against nothing
+        left to do. The notice is also shown when the filter hides nothing:
+        otherwise a shared address would be read as the full picture.
+        """
+        info = narrowed.get('filter') or {}
+        blocks = []
+
+        for name, value in info.get('dropped', []):
+            blocks.append(
+                f'<div class="alert crit"><h3>Ignored an unrecognised '
+                f'{html_escape(name)}</h3><p>The address asked for '
+                f'<code>{html_escape(name)}={html_escape(value)}</code>, which is '
+                f'not one of this view&rsquo;s states, so the whole round is '
+                f'shown. Honouring it would have produced an empty page that '
+                f'reads exactly like a round with nothing left to do.</p></div>'
+            )
+
+        if info.get('active'):
+            terms = ', '.join(f'{label} <strong>{html_escape(str(value))}</strong>'
+                              for label, value in info.get('terms', []))
+            shown, hidden = info.get('shown', 0), info.get('hidden', 0)
+            heading = (
+                'No assets match this filter'
+                if shown == 0 else
+                f'Showing {shown} of {info.get("total", shown)} listed assets'
+            )
+            hiding = (
+                f'It hides {hidden}.' if hidden else
+                'It hides nothing; every listed asset matches.'
+            )
+            # "Listed" rather than "in the round": the table also carries the
+            # manual and retired assets, which are outside the denominator on
+            # purpose. Two totals on one page have to be told apart.
+            blocks.append(
+                f'<div class="alert filt"><h3>{heading}</h3>'
+                f'<p>Filtered by {terms}. {hiding} The table lists every asset '
+                f'this round touches, the manual and retired ones included, so '
+                f'its total is not the denominator above &mdash; and the figures '
+                f'above describe the round and do not change with the filter.</p>'
+                f'<a class="reset" href="{html_escape(round_view_href(period))}">'
+                f'Show the whole round</a></div>'
+            )
+
+        return ''.join(blocks)
 
     def _exception_form(self, asset_id, period, withdraw=False):
         """The control that records or withdraws an exception.
@@ -3134,7 +3611,12 @@ class ReportHandler(BaseHTTPRequestHandler):
             groups.append((f"Retired &mdash; {len(state['retired'])}", rows))
 
         if not groups:
-            return '<div class="tblwrap"><div class="empty">No assets in scope for this round</div></div>'
+            # The two empty tables mean opposite things, so they do not read
+            # the same. The notice above carries the way back to the round.
+            empty = ('No assets match this filter'
+                     if (state.get('filter') or {}).get('active')
+                     else 'No assets in scope for this round')
+            return f'<div class="tblwrap"><div class="empty">{empty}</div></div>'
 
         body = ''.join(
             f'<tr class="grp"><td colspan="7">{label}</td></tr>' + ''.join(rows)
@@ -4061,7 +4543,8 @@ class ReportHandler(BaseHTTPRequestHandler):
                 if view == 'fleet':
                     html = self.generate_fleet_view_html(period)
                 else:
-                    html = self.generate_round_view_html(period)
+                    html = self.generate_round_view_html(
+                        period, parse_round_filters(query_params))
                 logger.info(f"Generated {view} view for {period}: {len(html)} chars")
             else:
                 # Legacy dashboard

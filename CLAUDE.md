@@ -327,6 +327,29 @@ set.
 2. CSS is inline at line 342
 3. JavaScript is inline at line 545
 
+### Filtering the round view
+
+The filter lives between `compute_round_state()` and `_round_table()`, and
+nowhere else. `generate_round_view_html()` renders every figure - the headline,
+the meter, the per-owner bars, the alerts - from the unfiltered state, and only
+then calls `filter_round_state()` to build the copy the table is given.
+
+Keep that ordering. It is not a convention, it is the reason `1 of 10 assets
+scanned` cannot become a statement about what the reader was looking at: there
+is no point in the function where a filter is in scope and a figure has not
+been rendered yet. A test asserts the whole progress panel is byte-identical
+under every filter in turn.
+
+The pure parts - `parse_round_filters()`, `round_row_matches()`,
+`filter_round_state()`, `round_view_href()`, `search_key()` - carry doctests and
+know nothing about the handler.
+
+Adding a term means: parse it in `parse_round_filters()`, match it in
+`round_row_matches()`, name it in `round_filter_terms()` so the notice can say
+it is active, list it in `round_view_href()` so links keep it, offer it in
+`_filter_bar()`, and add it to the `carry` list in `generate_round_view_html()`
+so changing the round does not drop it.
+
 ## Endpoints
 
 The server provides two methods for report submission:

@@ -20,6 +20,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import tarfile
 import tempfile
@@ -869,6 +870,325 @@ class TestEarlierRoundsAreReachable(ServerHarness):
 
         self.assertIn('TARI-00001', in_march)
         self.assertIn('TARI-00001', in_september)
+
+
+# A register with enough shape to filter: two owners, three classes, an asset
+# that left scope with a reason, a retired one, and a serial written with the
+# separator the ISO tool uses so that searching for it without one has
+# something to fail on.
+FILTER_REGISTER_CSV = (
+    'asset_id,serial,owner,model,class,status,owner_since,valid_from,valid_to,'
+    'departure_reason\n'
+    f'{REAL_ASSET_ID},{REAL_SERIAL},Wouter van der Toorren,LENOVO 21K9CTO1WW,'
+    'linux,active,2024-01-01,2024-01-01,,\n'
+    'TARI-00031,MP1Y-69AC,Pim Snel,MacBook Pro,macos,active,'
+    '2024-01-01,2024-01-01,,\n'
+    'TARI-00042,WINBOX01,Pim Snel,ThinkPad,windows,active,'
+    '2024-01-01,2024-01-01,,\n'
+    'TARI-00055,LEFTONE1,Richard van Os,Laptop,linux,active,'
+    '2024-01-01,2024-01-01,2026-09-10,returned on leaving\n'
+    'TARI-00066,GONEONE1,Richard van Os,Laptop,linux,retired,'
+    '2024-01-01,2024-01-01,2025-01-01,end of life\n'
+    'TARI-00099,NOSUCHSERIAL,Never Submitted,Some Laptop,linux,active,'
+    '2024-01-01,2024-01-01,,\n'
+)
+
+
+class TestFilteringTheRoundView(ServerHarness):
+    """Narrowing the round table without moving the round's figures.
+
+    The register here is the harness one widened until every bucket the table
+    builds has something in it, so that a filter has something to remove.
+    """
+
+    def setUp(self):
+        super().setUp()
+        csv_path = self.workdir / 'filter-assets.csv'
+        csv_path.write_text(FILTER_REGISTER_CSV)
+        register = hb.AssetRegister(str(csv_path))
+        register.load()
+        hb.ReportHandler.asset_register = register
+        self.register = register
+
+        self.submit(REAL_ARCHIVE.read_bytes())
+        self.cache.rebuild()
+        self.period = hb.get_audit_period(
+            __import__('datetime').datetime.now(), self.config.audit_months)
+
+    # -- helpers ---------------------------------------------------------
+
+    def filtered_html(self, period=None, **terms):
+        """The round view under one filter, as a dashboard user would see it."""
+        from urllib.parse import urlencode
+        params = [('view', 'round')]
+        if period:
+            params.append(('period', period))
+        params += [(name, value) for name, value in terms.items()]
+        credentials = b64encode(f'admin:{PASSWORD}'.encode()).decode()
+        request = urllib.request.Request(
+            f'http://127.0.0.1:{self.port}/?' + urlencode(params),
+            headers={'Authorization': f'Basic {credentials}'},
+        )
+        with urllib.request.urlopen(request) as response:
+            return response.read().decode()
+
+    def assets_in_table(self, html):
+        """The asset ids the per-asset table is showing."""
+        table = html.split('<div class="tblwrap">', 1)
+        if len(table) == 1:
+            return set()
+        return set(re.findall(r'<strong>(TARI-\d+)</strong>', table[1]))
+
+    def figures(self, html):
+        """The progress panel with only its navigation taken out.
+
+        Every number stays - the headline, the meter widths, the key counts and
+        each owner's tally. What goes is where the owner bars point and which
+        one is marked, because those two are about the reader's view by design.
+        Everything left is a statement about the round, and a filter that moved
+        any of it would be putting a number on the page that depends on what
+        the reader happened to be looking at.
+        """
+        self.assertIn('<div class="summary">', html)
+        block = html.split('<div class="summary">', 1)[1].split('\n  </div>', 1)[0]
+        self.assertIn('Progress', block)
+        self.assertIn('By owner', block)
+        return re.sub(r' href="[^"]*"', '', block).replace(' sel"', '"')
+
+    def notice(self, html):
+        """The filter notice, or '' when there is none."""
+        if '<div class="alert filt">' not in html:
+            return ''
+        return html.split('<div class="alert filt">', 1)[1].split('</div>', 1)[0]
+
+    # -- the acceptance criterion ----------------------------------------
+
+    def test_the_figures_are_the_same_under_every_filter(self):
+        """The reason this work needed stating rather than just doing.
+
+        `1 of 6 assets scanned` is a compliance statement about the round. If a
+        filter could recompute it, the number on the page would depend on what
+        the reader was looking at - and somebody would eventually screenshot it
+        into an audit file.
+        """
+        whole = self.figures(self.filtered_html())
+
+        filters = [
+            {'state': 'scanned'}, {'state': 'accounted'},
+            {'state': 'outstanding'}, {'state': 'unexplained'},
+            {'state': 'manual'}, {'state': 'retired'},
+            {'owner': 'Pim Snel'}, {'owner': 'Never Submitted'},
+            {'class': 'linux'}, {'class': 'windows'},
+            {'q': 'TARI-00031'}, {'q': REAL_SERIAL},
+            {'state': 'outstanding', 'owner': 'Pim Snel'},
+            {'state': 'scanned', 'class': 'windows'},
+        ]
+        for terms in filters:
+            with self.subTest(**terms):
+                self.assertEqual(
+                    self.figures(self.filtered_html(**terms)), whole,
+                    f'the round\'s figures moved under {terms}')
+
+    def test_the_headline_counts_the_round_not_the_view(self):
+        """Stated separately, because it is the sentence people read."""
+        whole = self.filtered_html()
+        headline = re.search(r'of (\d+) assets scanned', whole).group(0)
+
+        narrowed = self.filtered_html(state='outstanding', owner='Pim Snel')
+
+        self.assertIn(headline, narrowed)
+        self.assertEqual(self.assets_in_table(narrowed), {'TARI-00031'})
+
+    def test_every_owner_stays_in_the_panel(self):
+        """The panel is a call list for the round, not a legend for the table."""
+        narrowed = self.filtered_html(owner='Pim Snel')
+
+        for owner in ('Wouter van der Toorren', 'Pim Snel',
+                      'Richard van Os', 'Never Submitted'):
+            self.assertIn(owner, self.figures(narrowed))
+
+    # -- narrowing -------------------------------------------------------
+
+    def test_narrowing_by_state_shows_only_that_section(self):
+        self.assertEqual(self.assets_in_table(self.filtered_html(state='scanned')),
+                         {REAL_ASSET_ID})
+        self.assertEqual(self.assets_in_table(self.filtered_html(state='manual')),
+                         {'TARI-00042'})
+        self.assertEqual(self.assets_in_table(self.filtered_html(state='retired')),
+                         {'TARI-00066'})
+        self.assertEqual(self.assets_in_table(self.filtered_html(state='outstanding')),
+                         {'TARI-00031', 'TARI-00099'})
+
+    def test_accounted_for_joins_the_exception_and_the_departure(self):
+        """They read as one section in the table, so they are one state here.
+
+        TARI-00055 left scope with a reason; TARI-00099 is excepted by an
+        operator. Both are resolved without evidence.
+        """
+        hb.ReportHandler.exception_store.mark(
+            'TARI-00099', self.period, 'no longer powered on', 'wtoorren')
+
+        shown = self.assets_in_table(self.filtered_html(state='accounted'))
+
+        self.assertEqual(shown, {'TARI-00055', 'TARI-00099'})
+
+    def test_narrowing_by_owner(self):
+        """Matched on the register's value, not on the proof-file slug."""
+        shown = self.assets_in_table(self.filtered_html(owner='Pim Snel'))
+
+        self.assertEqual(shown, {'TARI-00031', 'TARI-00042'})
+
+    def test_owner_matching_ignores_case_but_not_identity(self):
+        self.assertEqual(self.assets_in_table(self.filtered_html(owner='pim snel')),
+                         {'TARI-00031', 'TARI-00042'})
+        # owner_to_slug() would fold this to 'richard.os'; it is not identity.
+        self.assertEqual(self.assets_in_table(self.filtered_html(owner='richard.os')),
+                         set())
+
+    def test_narrowing_by_class(self):
+        """How somebody reads the part of the fleet that can submit today."""
+        linux = self.assets_in_table(self.filtered_html(**{'class': 'linux'}))
+
+        self.assertEqual(linux, {REAL_ASSET_ID, 'TARI-00055',
+                                 'TARI-00066', 'TARI-00099'})
+        self.assertNotIn('TARI-00042', linux)
+
+    def test_terms_compose(self):
+        both = self.assets_in_table(
+            self.filtered_html(state='outstanding', **{'class': 'macos'}))
+
+        self.assertEqual(both, {'TARI-00031'})
+
+    # -- finding one asset ------------------------------------------------
+
+    def test_find_by_asset_id_however_much_of_it_is_typed(self):
+        for typed in ('TARI-00031', 'tari-00031', 'tari00031', '00031'):
+            with self.subTest(typed=typed):
+                self.assertEqual(self.assets_in_table(self.filtered_html(q=typed)),
+                                 {'TARI-00031'})
+
+    def test_find_by_serial_with_and_without_its_separators(self):
+        """The register holds MP1Y-69AC; the machine reports MP1Y69AC.
+
+        normalise_serial() uppercases and strips whitespace but leaves
+        separators alone, so without folding them the two spellings are
+        different strings and only one of them finds the asset.
+        """
+        for typed in ('MP1Y-69AC', 'MP1Y69AC', 'mp1y69ac'):
+            with self.subTest(typed=typed):
+                self.assertEqual(self.assets_in_table(self.filtered_html(q=typed)),
+                                 {'TARI-00031'})
+
+    def test_find_by_the_serial_of_a_scanned_asset(self):
+        self.assertEqual(self.assets_in_table(self.filtered_html(q=REAL_SERIAL)),
+                         {REAL_ASSET_ID})
+
+    # -- saying what is hidden --------------------------------------------
+
+    def test_the_notice_names_the_terms_and_the_hidden_count(self):
+        html = self.filtered_html(state='outstanding', owner='Pim Snel')
+        notice = self.notice(html)
+
+        self.assertIn('outstanding', notice)
+        self.assertIn('Pim Snel', notice)
+        self.assertIn('Showing 1 of 6 listed assets', notice)
+        self.assertIn('It hides 5.', notice)
+        # The table's total and the round's denominator are different
+        # numbers on purpose, and the notice has to say which is which.
+        self.assertIn('is not the denominator above', notice)
+        self.assertIn('of 4 assets scanned', html)
+
+    def test_a_filter_matching_nothing_says_so_rather_than_reading_as_done(self):
+        """An empty table under a filter and an empty round mean opposites."""
+        html = self.filtered_html(owner='Nobody At All')
+
+        self.assertIn('No assets match this filter', self.notice(html))
+        self.assertEqual(self.assets_in_table(html), set())
+        self.assertIn('No assets match this filter',
+                      html.split('<div class="tblwrap">', 1)[1])
+        self.assertNotIn('No assets in scope for this round', html)
+
+    def test_a_filter_hiding_nothing_is_still_announced(self):
+        """Or a shared address reads as the full picture."""
+        every_state = '|'.join(key for key, _, _ in hb.ROUND_FILTER_STATES)
+        self.assertTrue(every_state)  # the vocabulary exists to be complete
+
+        html = self.filtered_html(q='TARI')
+
+        self.assertNotEqual(self.notice(html), '')
+        self.assertIn('It hides nothing', self.notice(html))
+
+    def test_the_way_back_is_offered(self):
+        html = self.filtered_html(state='outstanding')
+
+        self.assertIn('Show the whole round', html)
+        self.assertIn(f'/?view=round&amp;period={self.period}"', html)
+
+    def test_no_notice_when_nothing_is_filtered(self):
+        self.assertEqual(self.notice(self.filtered_html()), '')
+
+    def test_an_unrecognised_state_is_reported_and_not_honoured(self):
+        """A typo in an address should show the round, not an empty page."""
+        html = self.filtered_html(state='outstandng')
+
+        self.assertIn('Ignored an unrecognised state', html)
+        self.assertEqual(self.notice(html), '')
+        self.assertEqual(len(self.assets_in_table(html)), 6)
+
+    # -- shareable ---------------------------------------------------------
+
+    def test_the_address_carries_the_filter_and_the_control_shows_it(self):
+        html = self.filtered_html(state='outstanding', owner='Pim Snel')
+        form = html.split('<form class="filters"', 1)[1].split('</form>', 1)[0]
+
+        self.assertIn('<option value="outstanding" selected>', form)
+        self.assertIn('<option value="Pim Snel" selected>', form)
+
+    def test_the_control_is_a_get_form_and_needs_no_scripting(self):
+        """The legacy dashboard filtered by script and needed fixing twice."""
+        html = self.filtered_html()
+        form = html.split('<form class="filters"', 1)[1].split('</form>', 1)[0]
+
+        self.assertIn('method="get"', form)
+        self.assertNotIn('<script', html)
+        self.assertNotIn('onchange', html)
+
+    def test_a_filtered_link_to_a_closed_round(self):
+        """The filter composes with the round, which the view already honours."""
+        html = self.filtered_html(period='2026-03', state='outstanding')
+
+        self.assertIn('Audit round <strong class="mono">2026-03</strong>', html)
+        # Nothing was submitted in March, so everything active is outstanding.
+        self.assertEqual(self.assets_in_table(html),
+                         {REAL_ASSET_ID, 'TARI-00031', 'TARI-00055', 'TARI-00099'})
+
+    def test_changing_the_round_keeps_the_filter(self):
+        html = self.filtered_html(state='outstanding', owner='Pim Snel')
+        selector = html.split('class="rounds"', 1)[1].split('</form>', 1)[0]
+
+        self.assertIn('name="state" value="outstanding"', selector)
+        self.assertIn('name="owner" value="Pim Snel"', selector)
+
+    # -- the owner bars ----------------------------------------------------
+
+    def test_the_owner_bars_link_to_that_owner(self):
+        """They already look pressable and already carry the count."""
+        panel = self.filtered_html().split('class="owners"', 1)[1]
+
+        self.assertIn('owner=Pim+Snel', panel)
+        self.assertIn('owner=Richard+van+Os', panel)
+
+    def test_an_owner_bar_keeps_the_other_terms(self):
+        panel = self.filtered_html(state='outstanding').split('class="owners"', 1)[1]
+
+        self.assertIn('state=outstanding&amp;owner=Pim+Snel', panel)
+
+    def test_the_owner_being_shown_is_marked(self):
+        panel = self.filtered_html(owner='Pim Snel').split('class="owners"', 1)[1]
+
+        marked = re.findall(r'class="owner [^"]*sel"[^>]*>\s*<span class="nm">([^<]*)',
+                            panel)
+        self.assertEqual(marked, ['Pim Snel'])
 
 
 if __name__ == '__main__':

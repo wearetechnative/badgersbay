@@ -1,13 +1,13 @@
 ---
 # badgersbay-qeqg
 title: Filtering on the scan round view
-status: todo
+status: completed
 type: epic
 priority: normal
 tags:
     - dashboard
 created_at: 2026-09-17T14:29:24Z
-updated_at: 2026-09-17T14:29:24Z
+updated_at: 2026-09-18T11:32:59Z
 ---
 
 The scan round view groups assets into sections - scanned, accounted for,
@@ -58,3 +58,31 @@ The fleet view has its own shape and its own columns; whether it gets the same
 control is a separate question. Making earlier rounds reachable is
 `badgersbay-btmz`, and the two should agree on how the URL is spelled if both
 land.
+
+
+## Summary of Changes
+
+The round view's table narrows by `state=`, `owner=`, `class=` and `q=`, all
+query parameters on `/?view=round&period=<round>`, composing with each other and
+with the round selector, which carries them so changing the round keeps the
+question.
+
+The constraint held. The figures are rendered before the filtered copy exists,
+which is why a filter cannot reach a compliance number - see badgersbay-4lej for
+how it is pinned.
+
+Children: badgersbay-4lej, badgersbay-1ya5, badgersbay-guxx, badgersbay-u45r,
+badgersbay-crsb, all completed.
+
+New pure functions, all doctested and unaware of the handler: `search_key()`,
+`parse_round_filters()`, `round_filter_terms()`, `round_view_href()`,
+`round_row_entry()`, `round_row_matches()`, `filter_round_state()`.
+
+OpenSpec: `2026-09-18-filter-the-round-view`, archived. Four requirements added
+to `compliance-dashboard`.
+
+Verified: 116 doctests, 66 unit and end-to-end tests (25 of them new),
+`openspec validate --all --strict`, `nix flake check`.
+
+Not done, and deliberately: the fleet view has its own shape and its own
+columns, and whether it gets the same control is a separate question.

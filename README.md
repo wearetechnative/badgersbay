@@ -346,6 +346,41 @@ Accounted-for is not scanned. Folding the two together would merge "we hold
 evidence" with "we hold an excuse", and the deviation count is what the ISO
 tool needs as its own figure.
 
+## Narrowing the Round View
+
+The round view's table can be narrowed without changing what the round says.
+
+| Term    | Matches                                                                   |
+|---------|---------------------------------------------------------------------------|
+| `state` | `scanned`, `accounted`, `outstanding`, `unexplained`, `manual`, `retired` |
+| `owner` | The owner as the register holds it, ignoring case                         |
+| `class` | `linux`, `macos` or `windows`                                             |
+| `q`     | Part of an asset id or a hardware serial                                  |
+
+```
+/?view=round&period=2026-09&state=outstanding&owner=Pim+Snel
+```
+
+The terms are query parameters, so a filtered view survives a reload and can be
+pasted into a message to the person who owes a scan - which is the main thing
+anyone does with a filter here. They compose with the round selector, which
+carries them when the round changes.
+
+`q` folds case and separators away on both sides, so a serial written with the
+hyphen the ISO tool uses and the same serial as the machine reports it find the
+same asset. `TARI-00031`, `00031` and `31` all reach TARI-00031.
+
+**The figures never move.** `1 of 10 assets scanned`, the meter, the per-owner
+bars and the bucket counts are statements about the round, and they are computed
+before the filter is applied. A compliance number that changed with what the
+reader was looking at would eventually be screenshotted into an audit file.
+
+The view says which filter is active and how many assets it hides, with a link
+back to the whole round. It says so even when the filter hides nothing, because
+a shared address with an inert filter would otherwise read as the full picture.
+An empty table under a filter and an empty round look identical and mean
+opposite things, so they do not read the same.
+
 ## Dashboard Access
 
 ### Browser Access

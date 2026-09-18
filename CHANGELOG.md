@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **The scan round view can be narrowed.** The view grouped assets into
+  sections and offered no way to filter them, so the questions people actually
+  ask - what does one person still owe, which Linux machines are outstanding,
+  where is TARI-00031 - each meant reading the whole page.
+  - Narrow by state, by owner and by platform class, and find one asset by its
+    identifier or its hardware serial
+  - The serial matches however it is spelled: the register holds it with the
+    separators the ISO tool writes and a machine reports it without them
+  - The round's figures never move. The headline, the meter, the per-owner bars
+    and the bucket counts are computed before the filter exists and describe the
+    round, not the view, so a compliance number cannot come to depend on what
+    the reader was looking at
+  - The view says which filter is active and how many assets it hides, with a
+    link back to the whole round - said even when the filter hides nothing, so a
+    shared address is not read as the full picture
+  - The per-owner bars are links to that owner's assets, which is what they have
+    looked like since they were added
+  - A query parameter rather than a script, so a filtered view survives a reload,
+    can be pasted into a message, and composes with the round selector
+
 - **Earlier scan rounds are reachable.** A closed round is what an auditor asks
   about, and the only way to see one was to know the URL scheme and type it -
   the selector the previous dashboard had did not survive the move to the round
