@@ -1,14 +1,14 @@
 ---
 # badgersbay-kgl2
 title: Requests standing with the ISO tool administrator
-status: todo
+status: completed
 type: task
 priority: normal
 tags:
     - iso
     - register
 created_at: 2026-09-17T13:32:40Z
-updated_at: 2026-09-17T13:32:40Z
+updated_at: 2026-09-18T11:20:26Z
 ---
 
 Raised while rebuilding the register (`rebuild-asset-register-from-iso-export`).
@@ -58,3 +58,30 @@ from the export alone cannot name anybody. Deriving the mapping by joining on
 serial resolved 1 of 15 and produced two contradictions, so it is not a
 workaround. A person export - entityId plus name - would remove that obstacle
 entirely.
+
+
+## Closed
+
+Reported done on 2026-09-18 and closed as handled. What the outcome was per
+item is not recorded here.
+
+The list is kept below so a later reader can see the scope this bean carried:
+
+- Fill the `Asset tag` column in the ISO tool, so the TARI numbers travel in
+  the export instead of being recovered from a workbook that is regenerated
+  every round.
+- Record `TARI-00022` (`PF50L2ML`) and `TARI-00041` (`MP1Y69AC`). Both were
+  assigned by hand during the register rebuild and existed only in
+  badgersbay's register.
+- Correct `AC06CMEP` to `YD063JGA` for `TARI-00031`.
+- Report `PF2RFH1Z` and `MP1Y69AC` as recorded `Encrypted: No`.
+- Ask for a person export mapping entity ids to names.
+
+Which of these were fulfilled, and in what form, was not written down at the
+time. Anyone who needs that should read it from the tool rather than from this
+bean.
+
+One thing is worth checking before the next register rebuild: whether the
+`Asset tag` column is now populated. Filled, the rebuild is a transformation of
+the export; empty, it is another manual reconciliation. This bean does not say
+which it will be.
