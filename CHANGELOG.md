@@ -64,9 +64,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ISO scope each stay out, and each exclusion is recorded with its reason - so a
   reader comparing the register against the company's laptop count can tell a
   decision from an omission.
-  - `asset_id` comes from the ISO tool. badgersbay does not issue identifiers of
-    its own: two issuers would drift, and the register ships as an encrypted
-    secret nobody can consult
+  - `asset_id` is assigned and maintained in the register itself - see the entry
+    below, which reverses what this rule first said
   - Identity follows the asset, not the person holding it. A machine that moves
     between people keeps its own identifier rather than inheriting the one of the
     machine it replaced for someone
@@ -128,6 +127,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   were retired is worse than the risk.
 
 ### Changed
+
+- **The register is where asset identity lives.** The rule used to be that
+  `asset_id` came from the ISO tool and that badgersbay issued no identifiers of
+  its own. The xlsx export out of that tool was read once, to get the asset list
+  in order, and it is not a feed - so the rule made the register depend on a
+  source nobody maintains for it, and it was already untrue: `TARI-00022` and
+  `TARI-00041` were assigned by hand during the rebuild and exist only here.
+  - A number is assigned in the register, is never reused once issued, and two
+    rows share an `asset_id` only as the serial history of one asset over time
+  - A difference from the ISO tool - a different number, or none at all - is
+    expected rather than a discrepancy to reconcile
+  - What stays: identity follows the asset rather than its holder, and one asset
+    may carry several serials over its life, told apart by validity windows
+  - The loader does not check any of this. It validates classes, statuses, dates
+    and overlapping validity per serial, and reads `asset_id` only to refuse an
+    empty one; the specification says so rather than implying a check that is
+    not there
 
 - **The inventory generation the server is written against is now 2.** The
   client raised `asset-inventory.json` to schema 2 to carry the count. An
