@@ -1035,6 +1035,43 @@ def _download_type(stem):
     return stem[:-len('-report')] if stem.endswith('-report') else stem
 
 
+def selectable_rounds(submitted_periods, current_period):
+    """The rounds a reader can choose from, newest first.
+
+    Every round that has submissions, plus the round being viewed. The second
+    half is the part that matters: the list of rounds with data comes from the
+    submissions, so a round nobody has submitted to yet is not in it - and that
+    is exactly the round you are looking at when one opens. Without it, the
+    round being viewed would vanish from its own selector at the moment it is
+    emptiest.
+
+    Examples:
+        >>> selectable_rounds(['2026-03', '2026-09'], '2026-09')
+        ['2026-09', '2026-03']
+
+        A round with no submissions is still offered while it is being viewed:
+
+        >>> selectable_rounds(['2026-03'], '2026-09')
+        ['2026-09', '2026-03']
+
+        A history with nothing in it yields the current round alone, rather than
+        an empty control:
+
+        >>> selectable_rounds([], '2026-09')
+        ['2026-09']
+
+        Duplicates collapse, and a submission from an older round than the one
+        being viewed keeps its place in the order:
+
+        >>> selectable_rounds(['2026-09', '2026-09', '2025-09'], '2026-03')
+        ['2026-09', '2026-03', '2025-09']
+    """
+    rounds = {period for period in submitted_periods if period}
+    if current_period:
+        rounds.add(current_period)
+    return sorted(rounds, reverse=True)
+
+
 def owner_to_slug(owner):
     """Render an owner name the way the register's proof_file column does.
 
@@ -2680,6 +2717,15 @@ class ReportHandler(BaseHTTPRequestHandler):
           --accent:#72a6dc;--accent-soft:#1d2c3c;--ok:#5cb684;--ok-soft:#182c22;
           --warn:#d7a446;--warn-soft:#2e2718;--crit:#e08177;--crit-soft:#32201e;
           --manual:#a596cd;--manual-soft:#242038;}}
+        .rounds{margin-left:auto;display:flex;align-items:center;gap:6px;
+          font-size:12.5px;color:var(--ink-2)}
+        .rounds select{background:var(--surface);color:var(--ink);
+          border:1px solid var(--line);border-radius:4px;padding:3px 6px;
+          font-family:inherit;font-size:12.5px}
+        .rounds button{background:var(--surface-2);color:var(--ink);
+          border:1px solid var(--line);border-radius:4px;padding:3px 9px;
+          font-family:inherit;font-size:12.5px;cursor:pointer}
+        .rounds button:hover{background:var(--accent-soft)}
         *{box-sizing:border-box}
         body{margin:0;background:var(--ground);color:var(--ink);font-size:14px;line-height:1.5;
           font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
@@ -2789,6 +2835,29 @@ class ReportHandler(BaseHTTPRequestHandler):
             f'href="/?view={key}&period={html_escape(period)}">{label}</a>'
             for key, label in (('round', 'Scan round'), ('fleet', 'All assets'))
         )
+
+        # A plain GET form rather than a select that navigates by script. The
+        # dashboard these views replaced did the latter and its filter needed
+        # fixing twice; this one produces a URL that survives a reload and can
+        # be tested by reading HTML.
+        try:
+            submitted = [s.get('audit_period')
+                         for s in self.compliance_cache.submissions]
+        except Exception:
+            submitted = []
+        options = ''.join(
+            f'<option value="{html_escape(r)}"'
+            f'{" selected" if r == period else ""}>{html_escape(r)}</option>'
+            for r in selectable_rounds(submitted, period)
+        )
+        rounds = (
+            f'<form class="rounds" method="get" action="/">'
+            f'<input type="hidden" name="view" value="{html_escape(active_tab)}">'
+            f'<label for="period">Round</label>'
+            f'<select id="period" name="period">{options}</select>'
+            f'<button type="submit">Show</button>'
+            f'</form>'
+        )
         return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -2798,7 +2867,7 @@ class ReportHandler(BaseHTTPRequestHandler):
     <div class="brand"><span>&#129441;</span><h1>Badgersbay</h1></div>
     <div class="ctx">Audit round <strong class="mono">{html_escape(period)}</strong><br>{html_escape(register_note)}</div>
   </div>
-  <div class="tabs">{tabs}</div>
+  <div class="tabs">{tabs}{rounds}</div>
   {body}
 </div></body></html>"""
 

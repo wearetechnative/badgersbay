@@ -183,6 +183,17 @@ class ServerHarness(unittest.TestCase):
         with urllib.request.urlopen(request) as response:
             return response.read().decode()
 
+    def view_html(self, view, period=None):
+        """Fetch one view for one round, as a dashboard user would."""
+        credentials = b64encode(f'admin:{PASSWORD}'.encode()).decode()
+        query = f'?view={view}' + (f'&period={period}' if period else '')
+        request = urllib.request.Request(
+            f'http://127.0.0.1:{self.port}/{query}',
+            headers={'Authorization': f'Basic {credentials}'},
+        )
+        with urllib.request.urlopen(request) as response:
+            return response.read().decode()
+
     def evidence_url(self, *segments):
         return 'http://127.0.0.1:{}/evidence/{}'.format(
             self.port, '/'.join(segments))
@@ -762,6 +773,102 @@ class TestEvidenceRouteRefusesWhatItDoesNotServe(ServerHarness):
             self.download_status('unmatched', 'nobody-nowhere',
                                  '2026-09-17T09-00-00', 'lynis-report.json'),
             404)
+
+
+class TestEarlierRoundsAreReachable(ServerHarness):
+    """A closed round is what an auditor asks about, and it had no affordance.
+
+    The routing already honoured ?period=; what was missing was a way to get
+    there without knowing the URL scheme.
+    """
+
+    def test_the_selector_is_on_both_views(self):
+        self.submit(REAL_ARCHIVE.read_bytes())
+        self.cache.rebuild()
+
+        for view in ('round', 'fleet'):
+            html = self.view_html(view)
+            self.assertIn('class="rounds"', html, f'missing on {view}')
+            self.assertIn('name="period"', html)
+
+    def test_it_carries_the_view_so_the_tab_survives(self):
+        """Changing the round on the fleet view must not drop you elsewhere."""
+        self.submit(REAL_ARCHIVE.read_bytes())
+        self.cache.rebuild()
+
+        html = self.view_html('fleet')
+        form = html.split('class="rounds"', 1)[1].split('</form>', 1)[0]
+        self.assertIn('name="view" value="fleet"', form)
+
+    def test_the_round_being_viewed_is_marked_and_offered(self):
+        """Even when nothing has been submitted to it."""
+        html = self.view_html('round', '2099-03')
+
+        form = html.split('class="rounds"', 1)[1].split('</form>', 1)[0]
+        self.assertIn('<option value="2099-03" selected>', form)
+
+    def test_a_round_nobody_submitted_to_renders(self):
+        """An empty round is a finding, not an error."""
+        self.submit(REAL_ARCHIVE.read_bytes())
+        self.cache.rebuild()
+
+        html = self.view_html('round', '2099-03')
+
+        self.assertIn('2099-03', html)
+        self.assertNotIn('Internal server error', html)
+
+    def test_selecting_a_round_reaches_it(self):
+        self.submit(REAL_ARCHIVE.read_bytes())
+        self.cache.rebuild()
+
+        html = self.view_html('round', '2026-03')
+
+        self.assertIn('Audit round <strong class="mono">2026-03</strong>', html)
+
+    def test_a_closed_round_keeps_its_own_denominator(self):
+        """The property that makes a historical figure stable.
+
+        in_scope() takes the round's window, so an asset issued after a round
+        is absent from it however the register grows afterwards. A regression
+        here rewrites the past quietly, which is why it is pinned even though
+        no code in this change touches it.
+
+        Built on its own register rather than the harness one, whose rows are
+        all valid from 2024 - against those, any assertion about scoping would
+        pass by construction.
+        """
+        csv = self.storage / 'historical.csv'
+        csv.parent.mkdir(parents=True, exist_ok=True)
+        csv.write_text(
+            'asset_id,serial,owner,model,class,status,owner_since,valid_from,'
+            'valid_to,departure_reason\n'
+            'TARI-00001,OLDONE,Long Serving,Laptop,linux,active,'
+            '2024-01-01,2024-01-01,,\n'
+            'TARI-00002,NEWONE,Joined Later,Laptop,linux,active,'
+            '2026-08-10,2026-08-10,,\n'
+            'TARI-00003,GONEONE,Left Us,Laptop,linux,active,'
+            '2024-01-01,2024-01-01,2026-05-01,returned on leaving\n'
+        )
+        register = hb.AssetRegister(str(csv))
+        register.load()
+
+        march = hb.get_round_windows('2026-03', [3, 9], 4)
+        september = hb.get_round_windows('2026-09', [3, 9], 4)
+        in_march = {e['asset_id'] for e in register.in_scope(march[0], march[1])}
+        in_september = {e['asset_id']
+                        for e in register.in_scope(september[0], september[1])}
+
+        # Issued in August: absent from the March round, present in September.
+        self.assertNotIn('TARI-00002', in_march)
+        self.assertIn('TARI-00002', in_september)
+
+        # Left in May: still counted in the round it belonged to, gone from the
+        # one after it. A departure must not erase the round it was part of.
+        self.assertIn('TARI-00003', in_march)
+        self.assertNotIn('TARI-00003', in_september)
+
+        self.assertIn('TARI-00001', in_march)
+        self.assertIn('TARI-00001', in_september)
 
 
 if __name__ == '__main__':

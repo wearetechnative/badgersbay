@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Earlier scan rounds are reachable.** A closed round is what an auditor asks
+  about, and the only way to see one was to know the URL scheme and type it -
+  the selector the previous dashboard had did not survive the move to the round
+  and fleet views.
+  - A round selector on both views, carrying the active tab so changing the
+    round keeps you where you were reading
+  - The rounds offered are those with submissions plus the round being viewed,
+    so a round that has just opened does not vanish from its own selector while
+    it is still empty
+  - A plain form rather than a script: the address can be reloaded and shared,
+    and the control cannot silently stop working the way the previous filter did
+    twice
+
 - **The evidence behind an unmatched submission is reachable.** The round view
   named two reasons a submission matched no asset - the client could not read
   the hardware, or the register is behind - and both are settled by opening what
