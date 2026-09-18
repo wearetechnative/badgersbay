@@ -193,9 +193,20 @@ TARI-00037,PF3NFHJL,Pankhuri Prakash,Ideapad 3,linux,active,2024-01-01,2024-01-0
 TARI-00037,MP1Y69AC,Pankhuri Prakash,IdeaPad 5,linux,active,2026-08-01,2026-08-01,,
 ```
 
+A line whose first non-whitespace character is `#` is a note and is skipped.
+Notes may sit above the header and between rows, and nothing is parsed out of
+them - they are prose for whoever edits the file next:
+
+```csv
+# TARI-00031 carries the serial the machine reports. The ISO tool holds
+# AC06CMEP, the suffix of its hostname - do not "correct" this row to it.
+TARI-00031,YD063JGA,Elma Aker,ThinkPad,windows,active,2023-06-12,2023-06-12,,
+```
+
 The register contains names paired with hardware serials. Keep it out of the
 repository - `assets.csv` is gitignored, and in production it is delivered as
-an agenix secret.
+an agenix secret. It is therefore never seen in a diff or a review, which is
+what the notes are for.
 
 ### Validation
 

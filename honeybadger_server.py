@@ -1608,6 +1608,38 @@ def parse_register_date(value, field, row_number):
         )
 
 
+def register_lines(lines):
+    """Number the register's lines and drop the notes among them.
+
+    The register is hand-maintained and delivered as an encrypted secret, so it
+    is never seen in a diff and never reviewed. A note beside a row - why this
+    serial disagrees with the ISO tool, why this asset sits outside the
+    denominator - is the only place such a decision can be recorded, and
+    `csv` has no comment character of its own.
+
+    A line is a note when its first non-whitespace character is `#`. Nothing is
+    given up for that: an asset id, a serial, a class and a status are all
+    constrained, and none of the free-text columns is the first one.
+
+    The line numbers are the file's, notes counted, so that an error still names
+    the line the maintainer opens the file to.
+
+    Examples:
+        >>> list(register_lines(['# who owns what\\n', 'asset_id,serial\\n']))
+        [(2, 'asset_id,serial\\n')]
+        >>> [n for n, _ in register_lines(['a\\n', '  # indented note\\n', 'b\\n'])]
+        [1, 3]
+        >>> list(register_lines(['# nothing but a note\\n']))
+        []
+        >>> [t for _, t in register_lines(['x\\n', '#note\\n', 'y\\n'])]
+        ['x\\n', 'y\\n']
+    """
+    for number, text in enumerate(lines, start=1):
+        if text.lstrip().startswith('#'):
+            continue
+        yield number, text
+
+
 class AssetRegisterError(Exception):
     """Raised when the asset register cannot be trusted as a lookup key."""
 
@@ -1635,6 +1667,10 @@ class AssetRegister:
 
         Validation fails fast rather than degrading: a register that cannot be
         trusted produces a compliance report that cannot be trusted either.
+
+        Notes - lines beginning with `#` - are dropped before the parser sees
+        them, and are still counted when a line is named in an error. See
+        `register_lines()`.
         """
         self.rows = []
         self.loaded = False
@@ -1651,16 +1687,24 @@ class AssetRegister:
             return
 
         with open(path, newline='', encoding='utf-8-sig') as handle:
-            reader = csv.DictReader(handle)
-            required = {'asset_id', 'serial', 'owner', 'class'}
-            missing = required - set(reader.fieldnames or [])
-            if missing:
-                raise AssetRegisterError(
-                    f"assets.csv is missing required column(s): {', '.join(sorted(missing))}"
-                )
+            # Notes are dropped here rather than inside the parser: csv has no
+            # comment character, but it happily reads any iterable of lines.
+            numbered = list(register_lines(handle))
 
-            for offset, raw_row in enumerate(reader, start=2):
-                self.rows.append(self._parse_row(raw_row, offset))
+        line_numbers = [number for number, _ in numbered]
+        reader = csv.DictReader(text for _, text in numbered)
+        required = {'asset_id', 'serial', 'owner', 'class'}
+        # Reading fieldnames consumes the header, so line_num counts from it.
+        missing = required - set(reader.fieldnames or [])
+        if missing:
+            raise AssetRegisterError(self._header_error(numbered, missing))
+
+        for raw_row in reader:
+            # line_num counts the lines handed to the reader; the notes were
+            # never handed over, so the file's own numbering is looked up.
+            self.rows.append(
+                self._parse_row(raw_row, line_numbers[reader.line_num - 1])
+            )
 
         self._check_serial_overlaps()
 
@@ -1671,6 +1715,28 @@ class AssetRegister:
         logger.info(
             f"Asset register loaded: {len(self.rows)} row(s), "
             f"{len(assets)} asset(s), {len(active)} active"
+        )
+
+    @staticmethod
+    def _header_error(numbered, missing):
+        """Say which line was read as the header, and what it said.
+
+        Listing the columns alone sends the reader after a column problem. The
+        line that arrived is the diagnosis; it is quoted so that a stray
+        separator, a tab or a trailing space is visible rather than invisible.
+        """
+        if not numbered:
+            return (
+                "assets.csv has no header line: the file is empty, or holds "
+                "nothing but notes"
+            )
+
+        number, text = numbered[0]
+        header = text.rstrip('\r\n')
+        return (
+            f"assets.csv line {number} is not a usable header: missing required "
+            f"column(s): {', '.join(sorted(missing))}. "
+            f"The line reads: {header!r}"
         )
 
     def _parse_row(self, raw_row, row_number):

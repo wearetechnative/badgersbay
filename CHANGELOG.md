@@ -173,6 +173,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A note may sit beside a row in the asset register.** A `#` line anywhere in
+  `assets.csv` used to stop the server from starting: at the top it was read as
+  the header, reported as four missing columns that were all present; further
+  down it parsed as a data row and failed on whichever field it landed in. The
+  register is hand-maintained, is the record of asset identity, and ships as an
+  encrypted secret that is never seen in a diff - so a note next to the row is
+  the only place a decision about it can be recorded.
+  - Lines whose first non-whitespace character is `#` are skipped, above the
+    header and between rows. Nothing is parsed out of them and nothing is
+    preserved on write: the register is read-only to the server
+  - Line numbers in errors still count the notes, so an error names the line
+    the maintainer opens the file to
+  - An unusable header now names and quotes the line that was read as the
+    header, instead of only listing the columns that were expected
+  - `assets.csv.example` carries the explanations it was written to have -
+    among them why a serial that disagrees with the ISO tool must not be
+    "corrected", and why a row sits outside the denominator
+
 - **A submission from a current client answers 200 again.**
   `asset-inventory.json` is a JSON member, so it reached the report type
   detection, which did not know it and reported it as unrecognised. Every

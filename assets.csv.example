@@ -1,8 +1,35 @@
+# The asset register: the list of systems compliance is measured against.
+# Hand-maintained, and the record of asset identity - asset numbers are
+# assigned and maintained here, not read out of the ISO tool.
+#
+# A line whose first non-whitespace character is # is a note and is skipped.
+# Notes may sit above the header and between rows. Use them: the real register
+# ships as an agenix secret, so it is never seen in a diff or a review, and a
+# note beside a row is the only place a decision about that row is recorded.
+#
+# Keep the real file out of the repository. It pairs people's names with the
+# serials of the laptops they carry.
 asset_id,serial,owner,model,class,status,owner_since,valid_from,valid_to,departure_reason
 TARI-90001,ABC1234X,Alex Dubois,LENOVO ThinkPad T14 21F6CTO1WW,linux,active,2024-02-05,2024-02-05,,
+# A model containing a comma and a quote: quote the field, double the quote.
 TARI-90002,DEF5678Y,Rowan Meijer,"MacBook Pro 14"", M3, 2024, 18Gb",macos,active,2024-09-16,2024-09-16,,
+# The serial is what the machine reports, not what the ISO tool holds. The
+# tool has GHI9012 for this asset, which is the suffix of its Windows hostname
+# rather than a hardware serial. Do not "correct" this row to match the tool:
+# a submission is matched on what the machine sends, so the asset would stop
+# matching itself.
+#
+# Windows also sits outside the round's denominator for now, because the
+# client cannot submit yet. The row is here so the asset is not forgotten, not
+# because it is expected to report.
 TARI-90003,GHI9012Z,Sacha Vermeulen,HP ProBook 450 G10,windows,active,2025-01-20,2025-01-20,,
 TARI-90004,JKL3456A,Noor Hendriks,"Laptop Framework 13"" (AMD Ryzen 7040)",linux,active,2025-06-02,2025-06-02,,
+# One asset, two serials. The mainboard was replaced on 2026-05-01 and the
+# machine has reported a different serial since. The asset_id is unchanged, so
+# the history stays continuous; the validity windows meet and never overlap.
 TARI-90005,MNO7890B,Kim Jansen,Lenovo IdeaPad 5 14ARE05,linux,active,2024-03-11,2024-03-11,2026-05-01,mainboard replaced
 TARI-90005,PQR1234C,Kim Jansen,Lenovo IdeaPad 5 14ARE05,linux,active,2026-05-01,2026-05-01,,
+# Left the fleet with a reason, so the round it belonged to subtracts it
+# instead of counting it outstanding for ever. A departure without a reason is
+# reported rather than subtracted.
 TARI-90006,STU5678D,Robin de Groot,"MacBook Air 13"", M2, 2023, 16Gb",macos,retired,2023-04-18,2023-04-18,2026-02-28,returned on leaving

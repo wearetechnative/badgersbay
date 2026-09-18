@@ -1191,5 +1191,145 @@ class TestFilteringTheRoundView(ServerHarness):
         self.assertEqual(marked, ['Pim Snel'])
 
 
+class TestNotesInTheRegister(unittest.TestCase):
+    """A `#` line is a note, and the register loads around it.
+
+    No server here: the register is read straight off disk, because what is
+    under test is the file format rather than anything the dashboard does with
+    it. The registers are written out in full rather than built from
+    REGISTER_CSV, so that a note and the line it explains can be read together.
+    """
+
+    HEADER = ('asset_id,serial,owner,model,class,status,owner_since,'
+              'valid_from,valid_to,departure_reason\n')
+    ROW_23 = ('TARI-00023,PF50L2MR,Wouter van der Toorren,LENOVO 21K9CTO1WW,'
+              'linux,active,2024-01-01,2024-01-01,,\n')
+    ROW_31 = ('TARI-00031,YD063JGA,Elma Aker,ThinkPad,windows,active,'
+              '2023-06-12,2023-06-12,,\n')
+
+    def setUp(self):
+        previous_level = hb.logger.level
+        hb.logger.setLevel(logging.ERROR)
+        self.addCleanup(hb.logger.setLevel, previous_level)
+
+        self.workdir = Path(tempfile.mkdtemp(prefix='badgersbay-notes-'))
+        self.addCleanup(shutil.rmtree, self.workdir, ignore_errors=True)
+
+    def register(self, text):
+        """Write a register and load it, returning the AssetRegister."""
+        path = self.workdir / 'assets.csv'
+        path.write_text(text)
+        register = hb.AssetRegister(str(path))
+        register.load()
+        return register
+
+    def test_a_note_above_the_header(self):
+        """The case from the bean: the first line is read as the header.
+
+        The real register ships as an agenix secret and is never seen in a
+        diff, so the top of the file is exactly where somebody says what it is.
+        """
+        register = self.register(
+            '# The asset register: the denominator compliance is measured\n'
+            '# against. Keep it out of the repository.\n'
+            + self.HEADER + self.ROW_23
+        )
+
+        self.assertEqual([row['asset_id'] for row in register.rows],
+                         ['TARI-00023'])
+        self.assertTrue(register.loaded)
+
+    def test_a_note_between_rows_is_skipped(self):
+        """And does not arrive as a row of its own."""
+        register = self.register(
+            self.HEADER + self.ROW_23
+            + '# TARI-00031 carries the serial Win32_BIOS reports. The ISO\n'
+              '# tool holds AC06CMEP, the suffix of the hostname - do not\n'
+              '# "correct" this row to it, or it stops matching.\n'
+            + self.ROW_31
+        )
+
+        self.assertEqual([row['asset_id'] for row in register.rows],
+                         ['TARI-00023', 'TARI-00031'])
+        self.assertEqual(register.rows[1]['serial'], 'YD063JGA')
+
+    def test_an_indented_note_is_a_note(self):
+        """So a note can sit under the row it belongs to."""
+        register = self.register(
+            self.HEADER + self.ROW_23 + '    # outside the denominator\n'
+            + self.ROW_31
+        )
+
+        self.assertEqual(len(register.rows), 2)
+
+    def test_a_hash_inside_a_field_is_not_a_note(self):
+        """Only the first non-whitespace character decides."""
+        register = self.register(
+            self.HEADER
+            + 'TARI-00023,PF50L2MR,Wouter van der Toorren,ThinkPad #2,'
+              'linux,active,2024-01-01,2024-01-01,,\n'
+        )
+
+        self.assertEqual(register.rows[0]['model'], 'ThinkPad #2')
+
+    def test_an_error_names_the_line_in_the_file(self):
+        """The number has to lead to the line the maintainer opens.
+
+        Every note shifts the rows down by one. A number counted off the parsed
+        rows would drift further into the file the more notes somebody wrote,
+        so commenting would be punished with a wrong error - worse than the
+        refusal it replaces.
+        """
+        with self.assertRaises(hb.AssetRegisterError) as caught:
+            self.register(
+                '# two notes above the header\n'
+                '# and this is the second\n'
+                + self.HEADER + self.ROW_23
+                + '# one more, which puts the bad row on line 6\n'
+                + 'TARI-00031,YD063JGA,Elma Aker,ThinkPad,plan9,active,'
+                  '2023-06-12,2023-06-12,,\n'
+            )
+
+        self.assertIn('row 6', str(caught.exception))
+        self.assertIn('plan9', str(caught.exception))
+
+    def test_an_unusable_header_quotes_the_line(self):
+        """The bean's second complaint: the message listed columns that were there.
+
+        A semicolon-separated export is the case that still reaches here now
+        that a note cannot.
+        """
+        with self.assertRaises(hb.AssetRegisterError) as caught:
+            self.register(
+                '# exported from the workbook\n'
+                'asset_id;serial;owner;model;class;status\n'
+                'TARI-00023;PF50L2MR;Wouter van der Toorren;ThinkPad;linux;active\n'
+            )
+
+        message = str(caught.exception)
+        self.assertIn('line 2', message)
+        self.assertIn('asset_id;serial;owner;model;class;status', message)
+        # The expected columns are still named: the gap between what was wanted
+        # and what arrived is the diagnosis.
+        self.assertIn('asset_id, class, owner, serial', message)
+
+    def test_a_register_of_only_notes_says_it_has_no_header(self):
+        """Rather than reporting every column as missing."""
+        with self.assertRaises(hb.AssetRegisterError) as caught:
+            self.register('# nothing here yet\n# but a plan to fill it in\n')
+
+        self.assertIn('no header line', str(caught.exception))
+
+    def test_the_example_register_loads_and_carries_notes(self):
+        """assets.csv.example is the documentation, so it has to parse."""
+        text = (HERE / 'assets.csv.example').read_text()
+        register = self.register(text)
+
+        self.assertTrue(register.loaded)
+        self.assertTrue(register.rows)
+        self.assertTrue([line for line in text.splitlines()
+                         if line.lstrip().startswith('#')])
+
+
 if __name__ == '__main__':
     unittest.main()
