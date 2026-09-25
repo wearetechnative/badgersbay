@@ -740,13 +740,13 @@ def inventory_cell(inventory, field):
     Examples:
         >>> inv = {'findings': {'firewall': {'value': 'Yes', 'finding': 'Yes (ufw)'},
         ...                     'hardening_score': {'value': 72, 'finding': '72/100'},
-        ...                     'screen_lock': {'value': None, 'finding': 'niet vastgesteld'}}}
+        ...                     'screen_lock': {'value': None, 'finding': 'not determined'}}}
         >>> inventory_cell(inv, 'firewall')
         ('Yes', 'Yes (ufw)', True)
         >>> inventory_cell(inv, 'hardening_score')
         ('72', '72/100', True)
         >>> inventory_cell(inv, 'screen_lock')
-        ('unknown', 'niet vastgesteld', False)
+        ('unknown', 'not determined', False)
         >>> inventory_cell(inv, 'os_uptodate')
         ('unknown', '', False)
         >>> inventory_cell(None, 'firewall')
@@ -756,9 +756,9 @@ def inventory_cell(inventory, field):
 
         >>> counted = {'findings': {'vulnerable_packages': {
         ...     'value': None, 'count': 3,
-        ...     'finding': '3 kwetsbare packages gevonden'}}}
+        ...     'finding': '3 vulnerable packages found'}}}
         >>> inventory_cell(counted, 'vulnerable_packages')
-        ('3', '3 kwetsbare packages gevonden', True)
+        ('3', '3 vulnerable packages found', True)
 
         Zero is a measurement too, not an absence:
 

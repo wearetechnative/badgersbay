@@ -324,6 +324,8 @@ class TestRealArchive(ServerHarness):
         # The value, and the finding it came from, both on the row
         self.assertIn('title="Yes (LUKS)"', html)
         self.assertIn('title="Yes (auto-lock: 5 minutes)"', html)
+        # Dutch, because the 0.4.1 client that made this archive wrote its
+        # findings in Dutch. The server shows a finding as it arrived.
         self.assertIn('title="72/100 - drempel &gt;=65 gehaald"', html)
         self.assertIn('>72<', html)
 
@@ -341,7 +343,7 @@ class TestRealArchive(ServerHarness):
         document['findings']['vulnerable_packages'] = {
             'value': None,
             'count': 3,
-            'finding': '3 kwetsbare packages gevonden',
+            'finding': '3 vulnerable packages found',
         }
         for name in list(members):
             if name.endswith(hb.ASSET_INVENTORY_FILENAME):
@@ -354,7 +356,7 @@ class TestRealArchive(ServerHarness):
         html = self.fleet_html()
         row = html.split(REAL_ASSET_ID, 1)[1].split('</tr>', 1)[0]
         cell = row.split('<td class="fnd">')[-1]
-        self.assertIn('title="3 kwetsbare packages gevonden"', cell)
+        self.assertIn('title="3 vulnerable packages found"', cell)
         self.assertIn('>3<', cell)
         self.assertNotIn('unknown', cell)
         # and no verdict of the dashboard's own
@@ -445,7 +447,7 @@ class TestDeclinedValue(ServerHarness):
         document = json.loads(REAL_INVENTORY.read_text())
         document['findings']['screen_lock'] = {
             'value': None,
-            'finding': 'niet vastgesteld - geen sessie-informatie beschikbaar',
+            'finding': 'not determined - no session information available',
         }
         for name in list(members):
             if name.endswith(hb.ASSET_INVENTORY_FILENAME):
@@ -460,7 +462,7 @@ class TestDeclinedValue(ServerHarness):
 
         html = self.fleet_html()
         row = html.split(REAL_ASSET_ID, 1)[1].split('</tr>', 1)[0]
-        self.assertIn('niet vastgesteld - geen sessie-informatie beschikbaar', row)
+        self.assertIn('not determined - no session information available', row)
         self.assertIn('unknown', row)
 
     def test_unknown_with_a_reason_is_not_blank(self):
