@@ -173,6 +173,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A Windows submission with a HardeningKitty report is complete.** Every
+  Windows submission was recorded incomplete with `hardening` missing, although
+  its archive carried the report: the tar handler only recognised JSON members,
+  and the Windows client sends its hardening audit as `hardeningkitty.csv`.
+  - `hardeningkitty.csv` is now recognised as report type `hardeningkitty`,
+    checked by its header row (a UTF-8 byte order mark is tolerated), stored
+    byte for byte beside the archive and included in the submission's reports
+  - Records stored before the fix are repaired once at startup from their own
+    archives, touching no other field; each repaired record is logged. Nobody
+    has to submit again
+  - A closed round may therefore show those Windows assets complete where it
+    showed them incomplete before
+  - Windows stays outside the round denominator (`MANUAL_CLASSES`) until bean
+    badgersbay-n8g8
+
 - **A note may sit beside a row in the asset register.** A `#` line anywhere in
   `assets.csv` used to stop the server from starting: at the top it was read as
   the header, reported as four missing columns that were all present; further
