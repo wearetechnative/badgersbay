@@ -642,11 +642,146 @@ SERIAL_PLACEHOLDERS = {
 VALID_ASSET_CLASSES = {'linux', 'macos', 'windows'}
 VALID_ASSET_STATUSES = {'active', 'retired'}
 
+# The Windows client's hardening audit. Unlike the other reports it is CSV, so
+# it is recognised by name and header rather than parsed as JSON, and stored as
+# the bytes that arrived.
+HARDENINGKITTY_FILENAME = 'hardeningkitty.csv'
+HARDENINGKITTY_COLUMNS = ('ID', 'Category', 'Name', 'Severity', 'Result', 'Recommended')
+
 # Where each recognised report type is written inside a submission record.
 REPORT_FILENAMES = {
     'fastfetch': 'fastfetch-report.json',
     'lynis': 'lynis-report.json',
+    'hardeningkitty': HARDENINGKITTY_FILENAME,
 }
+
+
+def is_hardeningkitty_result(content):
+    """Whether bytes are a HardeningKitty result, judged by the header row.
+
+    Only the header is checked: the rows are HardeningKitty's business. The
+    Windows client writes its files as UTF-8 with a byte order mark, which is
+    allowed for.
+
+    Examples:
+        >>> header = b'"ID","Category","Name","Severity","Result","Recommended","TestResult"'
+        >>> is_hardeningkitty_result(header + b'\\r\\n"1","Account","x","Low","0","1","Failed"')
+        True
+        >>> is_hardeningkitty_result(b'\\xef\\xbb\\xbf' + header)
+        True
+        >>> is_hardeningkitty_result(b'')
+        False
+        >>> is_hardeningkitty_result(b'name,value\\nfoo,1')
+        False
+        >>> is_hardeningkitty_result(None)
+        False
+    """
+    if not content:
+        return False
+    text = content.decode('utf-8', errors='replace').lstrip('\ufeff')
+    first_line = text.splitlines()[0] if text.strip() else ''
+    if not first_line:
+        return False
+    columns = {column.strip() for column in next(csv.reader([first_line]))}
+    return set(HARDENINGKITTY_COLUMNS) <= columns
+
+
+def _is_windows_record(metadata):
+    """Whether a submission record is one a HardeningKitty report belongs in.
+
+    Examples:
+        >>> _is_windows_record({'class': 'windows'})
+        True
+        >>> _is_windows_record({'class': None, 'os_type': 'Windows 11 x86_64'})
+        True
+        >>> _is_windows_record({'class': 'linux', 'os_type': 'NixOS 26.05 (Yarara)'})
+        False
+    """
+    return (metadata.get('class') == 'windows'
+            or 'windows' in str(metadata.get('os_type') or '').lower())
+
+
+def _hardeningkitty_from_archive(archive_path):
+    """The HardeningKitty report inside a stored archive, or None."""
+    try:
+        with tarfile.open(archive_path, mode='r:*') as tar:
+            for member in tar.getmembers():
+                if not member.isfile():
+                    continue
+                if os.path.basename(member.name).lower() != HARDENINGKITTY_FILENAME:
+                    continue
+                content = tar.extractfile(member).read()
+                return content if is_hardeningkitty_result(content) else None
+    except (tarfile.TarError, OSError) as e:
+        logger.warning(f"Could not read {archive_path} for a HardeningKitty report: {e}")
+    return None
+
+
+def repair_hardeningkitty_records(storage_path):
+    """Add the HardeningKitty report to Windows records stored before it was recognised.
+
+    Before the server recognised hardeningkitty.csv, every Windows submission
+    was recorded without it and so as incomplete, although its archive carried
+    the report. Stored archives are otherwise never re-processed. This is the
+    one exception, and a safe one: it can only add a report the stored archive
+    provably contains. Nothing else in the record is touched - register state,
+    timeliness and the inventory stay as they were recorded.
+
+    Only Windows records are considered, so a start does not open the archive
+    of every Linux record, which lacks this report by design. Idempotent: a
+    repaired record no longer lacks the report.
+
+    Returns the record directories it repaired.
+    """
+    repaired = []
+    for tree in ('submissions', 'unmatched'):
+        base = Path(storage_path) / tree
+        if not base.is_dir():
+            continue
+        for key_dir in sorted(base.iterdir()):
+            if not key_dir.is_dir():
+                continue
+            for record_dir in sorted(key_dir.iterdir()):
+                meta_path = record_dir / 'submission.json'
+                if not meta_path.is_file():
+                    continue
+                try:
+                    with open(meta_path) as handle:
+                        metadata = json.load(handle)
+                except (OSError, json.JSONDecodeError):
+                    continue
+                reports = metadata.get('reports') or []
+                evidence = metadata.get('evidence')
+                if 'hardeningkitty' in reports or not evidence:
+                    continue
+                if not _is_windows_record(metadata):
+                    continue
+                content = _hardeningkitty_from_archive(record_dir / evidence)
+                if content is None:
+                    continue
+
+                write_report_file(record_dir / HARDENINGKITTY_FILENAME, content)
+                metadata['reports'] = sorted(set(reports) | {'hardeningkitty'})
+                # Through a file in the same directory, so the rename stays on
+                # one filesystem and an interruption leaves the old record whole.
+                temporary = record_dir / 'submission.json.tmp'
+                with open(temporary, 'w') as handle:
+                    json.dump(metadata, handle, indent=2)
+                os.replace(temporary, meta_path)
+                logger.info(f"Repaired {record_dir}: added the HardeningKitty report "
+                            "its archive carries")
+                repaired.append(record_dir)
+    return repaired
+
+
+def write_report_file(path, data):
+    """Write one extracted report: bytes as they arrived, anything else as JSON."""
+    if isinstance(data, bytes):
+        with open(path, 'wb') as handle:
+            handle.write(data)
+    else:
+        with open(path, 'w') as handle:
+            json.dump(data, handle, indent=2)
 
 # The client's own summary of what its reports say. It is stored like a report
 # but is not one: it describes the audit rather than being part of it, so it
@@ -2235,6 +2370,8 @@ class ReportHandler(BaseHTTPRequestHandler):
             return None
 
         # Match patterns for each report type
+        if basename == HARDENINGKITTY_FILENAME:
+            return 'hardeningkitty'
         if 'lynis' in basename and basename.endswith('.json'):
             return 'lynis'
         elif 'fastfetch' in basename and basename.endswith('.json'):
@@ -2354,8 +2491,9 @@ class ReportHandler(BaseHTTPRequestHandler):
                 if not member.isfile():
                     continue
 
-                # Only process JSON files
-                if not member.name.endswith('.json'):
+                # Only process JSON files, and the one CSV report
+                is_csv_report = os.path.basename(member.name).lower() == HARDENINGKITTY_FILENAME
+                if not member.name.endswith('.json') and not is_csv_report:
                     continue
 
                 # Collect size for validation
@@ -2414,6 +2552,19 @@ class ReportHandler(BaseHTTPRequestHandler):
                 try:
                     file_obj = tar.extractfile(member)
                     content = file_obj.read()
+
+                    # The CSV report is kept as the bytes that arrived, once
+                    # its header shows it is what its name says.
+                    if report_type == 'hardeningkitty':
+                        if is_hardeningkitty_result(content):
+                            results.append((member.name, report_type, content))
+                        else:
+                            unrecognised.append({
+                                'file': member.name,
+                                'reason': 'Not a HardeningKitty result: header lacks '
+                                          + ', '.join(HARDENINGKITTY_COLUMNS),
+                            })
+                        continue
 
                     # Parse JSON
                     json_content = json.loads(content)
@@ -2877,8 +3028,7 @@ class ReportHandler(BaseHTTPRequestHandler):
         saved_reports = []
         for member_name, report_type, data in extracted_reports:
             filename = REPORT_FILENAMES.get(report_type, f'{report_type}-report.json')
-            with open(record_dir / filename, 'w') as handle:
-                json.dump(data, handle, indent=2)
+            write_report_file(record_dir / filename, data)
             saved_reports.append({
                 'file': member_name,
                 'report_type': report_type,
@@ -2979,6 +3129,8 @@ class ReportHandler(BaseHTTPRequestHandler):
             filename = 'trivy-report.json'
         elif report_type_lower == 'vulnix':
             filename = 'vulnix-report.json'
+        elif report_type_lower == 'hardeningkitty':
+            filename = HARDENINGKITTY_FILENAME
         else:
             filename = f'{report_type}-report.json'
             logger.warning(f"Unexpected report type '{report_type}', saving as '{filename}'")
@@ -2999,9 +3151,8 @@ class ReportHandler(BaseHTTPRequestHandler):
 
             file_path = dir_path / filename
 
-            # Write JSON data to file
-            with open(file_path, 'w') as f:
-                json.dump(data, f, indent=2)
+            # Write the report data to file
+            write_report_file(file_path, data)
 
             return file_path, audit_period
 
@@ -3020,9 +3171,8 @@ class ReportHandler(BaseHTTPRequestHandler):
 
             file_path = dir_path / filename
 
-            # Write JSON data to file
-            with open(file_path, 'w') as f:
-                json.dump(data, f, indent=2)
+            # Write the report data to file
+            write_report_file(file_path, data)
 
             return file_path, None
 
@@ -4756,6 +4906,10 @@ def run_server(config):
     exceptions = ExceptionStore(config.storage_location)
     exceptions.rebuild()
     ReportHandler.exception_store = exceptions
+
+    # Before the index is read: Windows records stored before the server could
+    # recognise their HardeningKitty report.
+    repair_hardeningkitty_records(config.storage_location)
 
     # Initialize and build compliance cache
     cache = ComplianceCache(config)

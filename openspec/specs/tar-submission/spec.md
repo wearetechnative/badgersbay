@@ -32,15 +32,27 @@ store the archive whole, unchanged, regardless of what it extracts from it.
 
 ### Requirement: Extract recognised reports from the archive
 
-The server SHALL extract JSON members whose report type it recognises and SHALL
-store each through the normal report storage path, alongside the archive. It
-SHALL also extract the asset inventory, which is a summary of those reports
-rather than a report itself.
+The server SHALL extract members whose report type it recognises and SHALL store each through the
+normal report storage path, alongside the archive. The recognised reports are the JSON reports
+named for lynis, fastfetch, trivy and vulnix, and the HardeningKitty result `hardeningkitty.csv`.
+It SHALL also extract the asset inventory, which is a summary of those reports rather than a report
+itself.
 
 #### Scenario: Reports extracted and stored
 - **WHEN** an archive contains `fastfetch.json` and `lynis-report.json`
 - **THEN** both are stored as `fastfetch-report.json` and `lynis-report.json`
   in the same directory as the archive
+
+#### Scenario: HardeningKitty report extracted and stored
+- **WHEN** an archive contains `hardeningkitty.csv` whose header names the HardeningKitty result
+  columns (`ID`, `Category`, `Name`, `Severity`, `Result`, `Recommended`)
+- **THEN** it is stored as `hardeningkitty.csv` in the same directory as the archive
+- **AND** the submission's recorded report set includes `hardeningkitty`
+
+#### Scenario: A CSV that is not a HardeningKitty result
+- **WHEN** an archive contains `hardeningkitty.csv` without those columns, or empty
+- **THEN** it is reported as an unrecognised member with the reason
+- **AND** the report set does not include `hardeningkitty`
 
 #### Scenario: Asset inventory extracted
 - **WHEN** an archive contains `asset-inventory.json`
@@ -59,13 +71,23 @@ rather than a report itself.
 
 #### Scenario: Non-JSON members ignored
 - **WHEN** an archive contains `hardware-serial.txt`, `asset-inventory.txt` or
-  other non-JSON members
+  other non-JSON members other than `hardeningkitty.csv`
 - **THEN** they are left in the stored archive and not extracted
 
 #### Scenario: Previously stored archives unaffected
 - **WHEN** archives stored before this behaviour existed are present on disk
 - **THEN** they are not re-processed, and the periods holding them keep their
   recorded figures
+- **AND** the one exception is a record whose stored archive contains a valid `hardeningkitty.csv` its report
+  set lacks has that report extracted and added, once, at startup
+
+#### Scenario: Repair of a record stored before HardeningKitty was recognised
+- **WHEN** the server starts and finds such a record
+- **THEN** it stores `hardeningkitty.csv` beside the archive and adds `hardeningkitty` to the
+  record's report set
+- **AND** it changes no other field of the record
+- **AND** it logs the record and the report it added
+- **AND** a second start finds nothing left to repair
 
 ### Requirement: Report per-file status
 

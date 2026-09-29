@@ -53,19 +53,25 @@ Sysadmin Browser              │   ┌──────────┐   │
 
 | Type | Purpose | Target Systems |
 |------|---------|----------------|
-| **Lynis** | System hardening audit | All Linux/Unix |
-| **Trivy** | Container and OS vulnerability scanner | All (containers/traditional) |
-| **Vulnix** | NixOS-specific vulnerability scanner | NixOS systems |
-| **Fastfetch** | System metadata/identity | All (required!) |
+| **Lynis** | System hardening audit (`lynis*.json`) | Linux, macOS (required) |
+| **HardeningKitty** | Windows hardening audit (`hardeningkitty.csv`) | Windows (required) |
+| **Fastfetch** | System metadata/identity (`fastfetch*.json`) | All (required) |
+| **Trivy** | Container and OS vulnerability scanner (`trivy*.json`) | Accepted, not required |
+| **Vulnix** | NixOS-specific vulnerability scanner (`vulnix*.json`) | Accepted, not required |
 
 ### The "OK" Logic
 
-A system is marked **OK** (green) if it has:
-- **Fastfetch** (always required - provides system identity)
-- **AND** Lynis (system audit - always needed)
-- **AND** Trivy or Vulnix (vulnerability scanner - at least one)
+A submission is **complete** when it satisfies every requirement of its asset's
+class, as `REQUIREMENT_SATISFIED_BY` lists them:
+- **sysinfo** - Fastfetch, for every class
+- **AND hardening** - Lynis for `linux` and `macos`, HardeningKitty for `windows`
 
-**Rationale:** For ISO compliance, systems need baseline hardening audit (Lynis), identity (Fastfetch), and vulnerability scanning (Trivy or Vulnix depending on OS).
+Nothing requires Trivy or Vulnix. Requirements are named after what they
+establish, not after the tool, so a new tool for a class is one entry in that
+table.
+
+Classes in `MANUAL_CLASSES` (currently `windows`) are reported as manual and kept
+out of the round denominator; taking Windows out of it is bean badgersbay-n8g8.
 
 ## File Locations
 
@@ -380,6 +386,7 @@ New endpoint for submitting multiple reports at once:
 # Unit and end-to-end tests. Each starts a real server on an ephemeral port
 # against a throwaway storage tree and submits a real client archive over HTTP.
 python3 -m unittest test_asset_inventory -v
+python3 -m unittest test_hardeningkitty -v
 
 # The pure functions carry doctests
 python3 -m doctest honeybadger_server.py -v

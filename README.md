@@ -580,17 +580,22 @@ If you need to rollback, downgrade to version 1.0.x and remove auth arguments fr
 
 ## Report Types
 
-| Type | Purpose | Required |
-|------|---------|----------|
-| **Fastfetch** | System metadata (hostname, OS, kernel) | Always |
-| **Lynis** | System hardening audit | Always |
-| **Trivy** | Container/OS vulnerability scanner | One of Trivy or Vulnix |
-| **Vulnix** | NixOS vulnerability scanner | One of Trivy or Vulnix |
+| Type               | Purpose                                | Required                |
+|--------------------|----------------------------------------|-------------------------|
+| **Fastfetch**      | System metadata (hostname, OS, kernel) | Always                  |
+| **Lynis**          | System hardening audit                 | Linux and macOS         |
+| **HardeningKitty** | Windows hardening audit                | Windows                 |
+| **Trivy**          | Container/OS vulnerability scanner     | Accepted, not required  |
+| **Vulnix**         | NixOS vulnerability scanner            | Accepted, not required  |
 
 A system is marked "Complete" when it has:
 - Fastfetch (identity)
-- Lynis (hardening audit)
-- Trivy OR Vulnix (vulnerability scan)
+- A hardening audit: Lynis on Linux and macOS, HardeningKitty on Windows
+
+In a tar submission the HardeningKitty report is `hardeningkitty.csv`, the file
+the Windows client writes; it is recognised by its header row and stored byte
+for byte beside the archive. Windows assets are still reported as manual and
+kept out of the round denominator (`MANUAL_CLASSES`).
 
 `asset-inventory.json` is not in this table. It summarises what the reports
 say rather than being one of them, so it never counts toward completeness. See
